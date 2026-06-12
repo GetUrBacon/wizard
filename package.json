@@ -1,5 +1,5 @@
 {
-  "name": "@getbacon/wizard",
+  "name": "@geturbacon/wizard",
   "version": "0.1.0",
   "description": "One-command setup wizard for the Bacon ad network",
   "bin": {
