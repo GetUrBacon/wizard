@@ -142,11 +142,14 @@ async function runLogin(baconSetup) {
 }
 
 async function configurePreferences(baconSetup) {
-  // Ask the user 3 preference questions in the terminal, then write them
-  // via the bacon-config CLI. baconSetup is the path to bacon-setup binary.
+  // Ask preference questions in the terminal. Frequency + personalization go to
+  // the local config via bacon-config. Surfaces are opt-in: in-reply is on by
+  // default; statusline + thinking-verb are extra surfaces enabled via
+  // bacon-setup (they edit ~/.claude/settings.json). The user never picks the
+  // in-reply *format* — the advertiser's campaign sets strip/card/banner.
   const baconConfigPath = join(dirname(baconSetup), "bacon-config");
 
-  const questions = [
+  const configQs = [
     {
       label: "How often should ads appear?",
       options: "[minimal|standard|more|max|every]",
@@ -160,35 +163,36 @@ async function configurePreferences(baconSetup) {
       command: "profile",
       note: "More sharing = more relevant ads (may earn more); your prompts/code/keys are never shared.",
     },
-    {
-      // Only strip|cards here: the statusline ad is a separate opt-in that edits
-      // ~/.claude/settings.json via `bacon-setup statusline-enable`, not something
-      // `bacon-config surface` can turn on. Offering it here would silently no-op.
-      label: "Where should ads display?",
-      options: "[strip|cards]",
-      default: "cards",
-      command: "surface",
-    },
   ];
 
-  for (const q of questions) {
-    const promptText = `${q.label} ${dim(q.options)} [${q.default}]:`;
-    const answer = await prompt(promptText);
+  for (const q of configQs) {
+    const answer = await prompt(`${q.label} ${dim(q.options)} [${q.default}]:`);
     const value = answer || q.default;
+    if (q.note) note(q.note);
+    const r = spawnSync("python3", [baconConfigPath, q.command, value], { stdio: "pipe" });
+    if (r.status !== 0) note(`Could not set ${q.command} to ${value}`);
+    else ok(`${q.command} → ${value}`);
+  }
 
-    if (q.note) {
-      note(q.note);
-    }
+  // Surfaces — in-reply on by default, two optional extras.
+  note("In-reply ads are on by default (the advertiser picks the format).");
 
-    // Call bacon-config with the chosen value
-    const r = spawnSync("python3", [baconConfigPath, q.command, value], {
-      stdio: "pipe",
-    });
-    if (r.status !== 0) {
-      note(`Could not set ${q.command} to ${value}`);
-    } else {
-      ok(`${q.command} → ${value}`);
-    }
+  const wantStatusline = await prompt(
+    `Also show the animated ${bright("statusline")} ad? ${dim("[y/N]")}:`
+  );
+  if (wantStatusline === "y" || wantStatusline === "yes") {
+    const r = spawnSync("python3", [baconSetup, "statusline-enable", "--style", "marquee"], { stdio: "pipe" });
+    if (r.status === 0) ok("statusline → on");
+    else note("Could not enable statusline");
+  }
+
+  const wantSpinner = await prompt(
+    `Show the sponsored ${bright("thinking verb")} while Claude works? ${dim("[y/N]")}:`
+  );
+  if (wantSpinner === "y" || wantSpinner === "yes") {
+    const r = spawnSync("python3", [baconSetup, "spinner-enable"], { stdio: "pipe" });
+    if (r.status === 0) ok("thinking verb → on");
+    else note("Could not enable thinking verb");
   }
 }
 
