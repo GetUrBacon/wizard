@@ -1,6 +1,6 @@
 {
   "name": "@geturbacon/wizard",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "One-command setup wizard for the Bacon ad network",
   "bin": {
     "bacon-wizard": "bin/wizard.js"
