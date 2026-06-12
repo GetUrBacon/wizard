@@ -134,11 +134,8 @@ async function runLogin(baconSetup) {
     `  ${dim("Your browser will open to sign in with Clerk.")}`,
     `  ${dim("No prompts, no typing — just click Allow.")}`
   );
-  const answer = await prompt("Ready to open the browser? [Y/n]");
-  if (answer === "n" || answer === "no") {
-    note("Skipping — run `bacon-setup login` later to connect.");
-    return false;
-  }
+  await prompt("Press ENTER to open the browser");
+
   const r = spawnSync("python3", [baconSetup, "login"], { stdio: "inherit" });
   if (r.status !== 0) {
     fail("Login failed — run `bacon-setup login` manually to retry.");
