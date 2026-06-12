@@ -130,36 +130,64 @@ async function runLogin(baconSetup) {
 function showDone(loggedIn) {
   print(
     "",
-    green("━".repeat(52)),
+    `  ${dim("─".repeat(48))}`,
     "",
-    `  ${green("🥓 Bacon is set up!")}`,
+    `  ${green("✓ Bacon is set up!")}`,
     "",
     loggedIn
-      ? `  ${bright("Dashboard:")}  ${mono("https://geturbacon.com/dashboard")}`
-      : `  ${warn("→")} Connect your account:  ${mono("bacon-setup login")}`,
+      ? `  ${bright("Dashboard →")}  ${mono("https://geturbacon.com/dashboard")}`
+      : `  ${warn("→")} Connect later:  ${mono("bacon-setup login")}`,
     "",
-    `  ${dim("Ads will appear occasionally in Claude Code.")}`,
+    `  ${dim("Ads appear occasionally in Claude Code.")}`,
     `  ${dim("Your prompts never leave your machine.")}`,
     "",
-    `  ${dim("Configure:")}  ${mono("bacon-config show")}`,
-    `  ${dim("Pause:    ")}  ${mono("bacon-config pause")}`,
+    `  ${dim("configure")}  ${mono("bacon-config show")}`,
+    `  ${dim("pause     ")}  ${mono("bacon-config pause")}`,
     "",
-    green("━".repeat(52)),
+    `  ${dim("─".repeat(48))}`,
     ""
   );
+}
+
+// ─── banner ──────────────────────────────────────────────────────────────────
+
+const BACON_ART = [
+  "  ██████╗  █████╗  ██████╗ ██████╗ ███╗   ██╗",
+  "  ██╔══██╗██╔══██╗██╔════╝██╔═══██╗████╗  ██║",
+  "  ██████╔╝███████║██║     ██║   ██║██╔██╗ ██║",
+  "  ██╔══██╗██╔══██║██║     ██║   ██║██║╚██╗██║",
+  "  ██████╔╝██║  ██║╚██████╗╚██████╔╝██║ ╚████║",
+  "  ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝",
+];
+
+const STRIP = [
+  "  ░░▓▓▓░░░░░▓▓▓░░░░░▓▓▓░░░░░▓▓▓░░░░░▓▓▓░░░░░▓▓▓░",
+  "  ▓▓░░░▓▓▓▓▓░░░▓▓▓▓▓░░░▓▓▓▓▓░░░▓▓▓▓▓░░░▓▓▓▓▓░░░▓▓",
+  "  ░░▓▓▓░░░░░▓▓▓░░░░░▓▓▓░░░░░▓▓▓░░░░░▓▓▓░░░░░▓▓▓░░",
+];
+
+function printBanner() {
+  print("");
+  for (const line of BACON_ART) print(green(line));
+  print("");
+  for (const line of STRIP) {
+    // alternate fat (bright cream) and lean (green) chars
+    let out = "";
+    for (const ch of line) {
+      out += ch === "░" ? chalk.hex("#e9d9b8")(ch) : chalk.hex("#36e85a")(ch);
+    }
+    print(out);
+  }
+  print("");
+  print(`  ${bright("setup wizard")}  ${dim("·")}  ${dim("get paid to code")}`);
+  print(`  ${dim("─".repeat(48))}`);
+  print("");
 }
 
 // ─── main ────────────────────────────────────────────────────────────────────
 
 async function main() {
-  print(
-    "",
-    green("━".repeat(52)),
-    `  ${green("🥓 Bacon")} ${bright("— setup wizard")}`,
-    `  ${dim("Get paid to code. Ads in Claude Code, not in your way.")}`,
-    green("━".repeat(52)),
-    ""
-  );
+  printBanner();
 
   const TOTAL = 4;
 
