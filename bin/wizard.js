@@ -141,6 +141,23 @@ async function runLogin(baconSetup) {
   return true;
 }
 
+function launchSetupSkill() {
+  // Hand off into an interactive Claude Code session that runs /bacon:setup,
+  // so the user picks ad preferences through the skill's guided form rather
+  // than just keeping the defaults. Blocks until they finish the session.
+  print(
+    "",
+    `  ${bright("Opening Claude Code to choose your ad preferences…")}`,
+    `  ${dim("Answer the quick form, then you're done.")}`,
+    ""
+  );
+  const r = spawnSync("claude", ["/bacon:setup"], { stdio: "inherit" });
+  if (r.error || (r.status !== 0 && r.status !== null)) {
+    note("Couldn't auto-open Claude Code.");
+    print(`  ${warn("→")} Open Claude Code and run ${mono("/bacon:setup")} to finish.`);
+  }
+}
+
 function showDone(loggedIn) {
   print(
     "",
@@ -203,7 +220,7 @@ function printBanner() {
 async function main() {
   printBanner();
 
-  const TOTAL = 4;
+  const TOTAL = 5;
 
   step(1, TOTAL, "Checking prerequisites");
   checkNode();
@@ -228,7 +245,9 @@ async function main() {
   step(4, TOTAL, "Connecting your account");
   const loggedIn = await runLogin(baconSetup);
 
+  step(5, TOTAL, "Choosing your ad preferences");
   showDone(loggedIn);
+  launchSetupSkill();
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });
