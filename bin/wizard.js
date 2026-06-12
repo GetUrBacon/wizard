@@ -158,7 +158,7 @@ async function configurePreferences(baconSetup) {
       options: "[anonymous|stack|full]",
       default: "anonymous",
       command: "profile",
-      note: "Full earns more; your prompts/code/keys are never shared.",
+      note: "More sharing = more relevant ads (may earn more); your prompts/code/keys are never shared.",
     },
     {
       // Only strip|cards here: the statusline ad is a separate opt-in that edits
