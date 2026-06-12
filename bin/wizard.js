@@ -87,14 +87,35 @@ function checkClaude() {
 }
 
 function installPlugin() {
+  // First try the marketplace command
   note("running: claude plugin install github:GetUrBacon/bacon");
-  const r = spawnSync("claude", ["plugin", "install", "github:GetUrBacon/bacon"], { stdio: "inherit" });
-  if (r.status !== 0) {
-    fail("Plugin install failed.");
-    print(`  ${warn("→")} Try manually: ${mono("claude plugin install github:GetUrBacon/bacon")}`);
+  const r = spawnSync("claude", ["plugin", "install", "github:GetUrBacon/bacon"], { stdio: "pipe" });
+  if (r.status === 0) {
+    ok("Plugin installed via marketplace");
+    return;
+  }
+
+  // Fallback: git clone directly into ~/.claude/plugins/
+  note("marketplace install failed — cloning directly");
+  const pluginDir = join(homedir(), ".claude", "plugins", "GetUrBacon", "bacon");
+  if (existsSync(pluginDir)) {
+    ok("Plugin directory already exists — skipping clone");
+    return;
+  }
+
+  const { mkdirSync } = require("node:fs");
+  mkdirSync(join(homedir(), ".claude", "plugins", "GetUrBacon"), { recursive: true });
+
+  const clone = spawnSync(
+    "git",
+    ["clone", "--depth=1", "https://github.com/GetUrBacon/bacon.git", pluginDir],
+    { stdio: "inherit" }
+  );
+  if (clone.status !== 0) {
+    fail("Clone failed — install git or check your internet connection.");
     process.exit(1);
   }
-  ok("Plugin installed");
+  ok("Plugin cloned to ~/.claude/plugins/GetUrBacon/bacon");
 }
 
 function runSetupInit(baconSetup) {
