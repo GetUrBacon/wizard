@@ -156,7 +156,7 @@ function showDone(loggedIn) {
     `  ${green("✓ Bacon is set up!")}`,
     "",
     loggedIn
-      ? `  ${bright("Dashboard →")}  ${mono("https://geturbacon.com/dashboard")}`
+      ? `  ${bright("Dashboard →")}  ${mono("https://geturbacon.dev/dashboard")}`
       : `  ${warn("→")} Connect later:  ${mono("bacon-setup login")}`,
     "",
     `  ${dim("Ads appear occasionally in Claude Code.")}`,
