@@ -4,7 +4,7 @@
   "description": "One-command setup wizard for the Bacon ad network",
   "type": "module",
   "bin": {
-    "bacon-wizard": "./src/index.mjs"
+    "bacon-wizard": "./bin/wizard.js"
   },
   "scripts": {
     "start": "node src/index.mjs"
