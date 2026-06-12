@@ -1,0 +1,27 @@
+{
+  "name": "@getbacon/wizard",
+  "version": "0.1.0",
+  "description": "One-command setup wizard for the Bacon ad network",
+  "type": "module",
+  "bin": {
+    "bacon-wizard": "./src/index.mjs"
+  },
+  "scripts": {
+    "start": "node src/index.mjs"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GetUrBacon/wizard.git"
+  },
+  "keywords": ["bacon", "claude", "ads", "developer-monetization"],
+  "license": "MIT"
+}
