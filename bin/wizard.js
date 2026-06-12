@@ -4,7 +4,7 @@
 const { execFileSync, spawnSync } = require("node:child_process");
 const { existsSync, readdirSync } = require("node:fs");
 const { homedir } = require("node:os");
-const { join } = require("node:path");
+const { dirname, join } = require("node:path");
 const readline = require("node:readline");
 const chalk = require("chalk");
 
@@ -141,20 +141,59 @@ async function runLogin(baconSetup) {
   return true;
 }
 
-function launchSetupSkill() {
-  // Hand off into an interactive Claude Code session that runs /bacon:setup,
-  // so the user picks ad preferences through the skill's guided form rather
-  // than just keeping the defaults. Blocks until they finish the session.
-  print(
-    "",
-    `  ${bright("Opening Claude Code to choose your ad preferences…")}`,
-    `  ${dim("Answer the quick form, then you're done.")}`,
-    ""
-  );
-  const r = spawnSync("claude", ["/bacon:setup"], { stdio: "inherit" });
-  if (r.error || (r.status !== 0 && r.status !== null)) {
-    note("Couldn't auto-open Claude Code.");
-    print(`  ${warn("→")} Open Claude Code and run ${mono("/bacon:setup")} to finish.`);
+async function configurePreferences(baconSetup) {
+  // Ask the user 3 preference questions in the terminal, then write them
+  // via the bacon-config CLI. baconSetup is the path to bacon-setup binary.
+  const baconConfigPath = join(dirname(baconSetup), "bacon-config");
+
+  const questions = [
+    {
+      label: "How often should ads appear?",
+      options: "[minimal|standard|more|max|every]",
+      default: "standard",
+      command: "frequency",
+    },
+    {
+      label: "Personalization level?",
+      options: "[anonymous|stack|full]",
+      default: "anonymous",
+      command: "profile",
+      note: "Full earns more; your prompts/code/keys are never shared.",
+    },
+    {
+      label: "Where should ads display?",
+      options: "[strip|cards|statusline|both]",
+      default: "cards",
+      command: "surface",
+    },
+  ];
+
+  for (const q of questions) {
+    const promptText = `${q.label} ${dim(q.options)} [${q.default}]:`;
+    const answer = await prompt(promptText);
+    const value = answer || q.default;
+
+    if (q.note) {
+      note(q.note);
+    }
+
+    // Call bacon-config with the chosen value
+    const r = spawnSync("python3", [baconConfigPath, q.command, value], {
+      stdio: "pipe",
+    });
+    if (r.status !== 0) {
+      note(`Could not set ${q.command} to ${value}`);
+    } else {
+      ok(`${q.command} → ${value}`);
+    }
+  }
+}
+
+function markOnboarded(baconSetup) {
+  // Mark onboarding complete so /bacon:setup skill won't re-prompt later.
+  const r = spawnSync("python3", [baconSetup, "onboarded"], { stdio: "pipe" });
+  if (r.status !== 0) {
+    note("Could not mark onboarding complete");
   }
 }
 
@@ -246,8 +285,10 @@ async function main() {
   const loggedIn = await runLogin(baconSetup);
 
   step(5, TOTAL, "Choosing your ad preferences");
+  await configurePreferences(baconSetup);
+  markOnboarded(baconSetup);
+
   showDone(loggedIn);
-  launchSetupSkill();
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });
