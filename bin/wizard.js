@@ -189,7 +189,7 @@ const STRIP = [
 
 function printBanner() {
   print("");
-  for (const line of BACON_ART) print(green(line));
+  for (const line of BACON_ART) print(green(line) + "  🥓");
   print("");
   for (const line of STRIP) {
     // alternate fat (bright cream) and lean (green) chars
