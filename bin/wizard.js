@@ -141,59 +141,71 @@ async function runLogin(baconSetup) {
   return true;
 }
 
-async function configurePreferences(baconSetup) {
-  // Ask preference questions in the terminal. Frequency + personalization go to
-  // the local config via bacon-config. Surfaces are opt-in: in-reply is on by
-  // default; statusline + thinking-verb are extra surfaces enabled via
-  // bacon-setup (they edit ~/.claude/settings.json). The user never picks the
-  // in-reply *format* — the advertiser's campaign sets strip/card/banner.
+async function configurePreferences(baconSetup, p) {
+  // Arrow-key driven preferences via @clack/prompts (`p`). Frequency +
+  // personalization go to the local config via bacon-config. Surfaces are a
+  // multi-select: in-reply (default on; the advertiser — not the user — picks
+  // the strip/card/banner format) plus the statusline + thinking-verb opt-ins,
+  // which are enabled via bacon-setup (they edit ~/.claude/settings.json).
   const baconConfigPath = join(dirname(baconSetup), "bacon-config");
 
-  const configQs = [
-    {
-      label: "How often should ads appear?",
-      options: "[minimal|standard|more|max|every]",
-      default: "standard",
-      command: "frequency",
-    },
-    {
-      label: "Personalization level?",
-      options: "[anonymous|stack|full]",
-      default: "anonymous",
-      command: "profile",
-      note: "More sharing = more relevant ads (may earn more); your prompts/code/keys are never shared.",
-    },
-  ];
+  const guard = (v) => {
+    if (p.isCancel(v)) {
+      p.cancel("Setup cancelled — finish anytime with /bacon:config");
+      process.exit(0);
+    }
+    return v;
+  };
+  const setConfig = (cmd, value) => {
+    const r = spawnSync("python3", [baconConfigPath, cmd, value], { stdio: "pipe" });
+    if (r.status !== 0) note(`Could not set ${cmd} to ${value}`);
+  };
 
-  for (const q of configQs) {
-    const answer = await prompt(`${q.label} ${dim(q.options)} [${q.default}]:`);
-    const value = answer || q.default;
-    if (q.note) note(q.note);
-    const r = spawnSync("python3", [baconConfigPath, q.command, value], { stdio: "pipe" });
-    if (r.status !== 0) note(`Could not set ${q.command} to ${value}`);
-    else ok(`${q.command} → ${value}`);
-  }
+  const frequency = guard(await p.select({
+    message: "How often should ads appear?",
+    initialValue: "standard",
+    options: [
+      { value: "minimal",  label: "Minimal",      hint: "~$0.40/mo · 1 per 20 prompts" },
+      { value: "standard", label: "Standard",     hint: "~$0.75/mo · 1 per 10 prompts" },
+      { value: "more",     label: "More",         hint: "~$1.50/mo · 1 per 5 prompts" },
+      { value: "max",      label: "Max",          hint: "~$3.75/mo · 1 per 2 prompts" },
+      { value: "every",    label: "Every prompt", hint: "~$7.50/mo" },
+    ],
+  }));
+  setConfig("frequency", frequency);
 
-  // Surfaces — in-reply on by default, two optional extras.
-  note("In-reply ads are on by default (the advertiser picks the format).");
+  const profile = guard(await p.select({
+    message: "Personalization (your prompts/code/keys are NEVER shared)",
+    initialValue: "anonymous",
+    options: [
+      { value: "anonymous", label: "Anonymous", hint: "no data shared · random ads" },
+      { value: "stack",     label: "Stack",     hint: "languages/deps shared · more relevant" },
+      { value: "full",      label: "Full",      hint: "stack + domain · most relevant (may earn more)" },
+    ],
+  }));
+  setConfig("profile", profile);
 
-  const wantStatusline = await prompt(
-    `Also show the animated ${bright("statusline")} ad? ${dim("[y/N]")}:`
-  );
-  if (wantStatusline === "y" || wantStatusline === "yes") {
+  const surfaces = guard(await p.multiselect({
+    message: "Where can ads appear? (↑↓ move · space toggle · enter confirm)",
+    required: false,
+    initialValues: ["inreply"],
+    options: [
+      { value: "inreply",    label: "In replies",   hint: "default · advertiser sets the format" },
+      { value: "statusline", label: "Statusline",   hint: "animated sponsor in the status bar" },
+      { value: "spinner",    label: "Thinking verb", hint: "sponsored word while Claude works" },
+    ],
+  }));
+
+  setConfig("inreply", surfaces.includes("inreply") ? "on" : "off");
+  if (surfaces.includes("statusline")) {
     const r = spawnSync("python3", [baconSetup, "statusline-enable", "--style", "marquee"], { stdio: "pipe" });
-    if (r.status === 0) ok("statusline → on");
-    else note("Could not enable statusline");
+    if (r.status !== 0) note("Could not enable statusline");
   }
-
-  const wantSpinner = await prompt(
-    `Show the sponsored ${bright("thinking verb")} while Claude works? ${dim("[y/N]")}:`
-  );
-  if (wantSpinner === "y" || wantSpinner === "yes") {
+  if (surfaces.includes("spinner")) {
     const r = spawnSync("python3", [baconSetup, "spinner-enable"], { stdio: "pipe" });
-    if (r.status === 0) ok("thinking verb → on");
-    else note("Could not enable thinking verb");
+    if (r.status !== 0) note("Could not enable thinking verb");
   }
+  ok("Preferences saved");
 }
 
 function markOnboarded(baconSetup) {
@@ -292,7 +304,9 @@ async function main() {
   const loggedIn = await runLogin(baconSetup);
 
   step(5, TOTAL, "Choosing your ad preferences");
-  await configurePreferences(baconSetup);
+  // @clack/prompts is ESM-only; load it via dynamic import from this CJS bin.
+  const clack = await import("@clack/prompts");
+  await configurePreferences(baconSetup, clack);
   markOnboarded(baconSetup);
 
   showDone(loggedIn);

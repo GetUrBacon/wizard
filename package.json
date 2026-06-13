@@ -1,6 +1,6 @@
 {
   "name": "@geturbacon/wizard",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "description": "One-command setup wizard for the Bacon ad network",
   "bin": {
     "bacon-wizard": "bin/wizard.js"
@@ -9,6 +9,7 @@
     "start": "node bin/wizard.js"
   },
   "dependencies": {
+    "@clack/prompts": "^1.5.1",
     "chalk": "^4.1.2"
   },
   "engines": {
