@@ -2,8 +2,8 @@
 "use strict";
 
 const { execFileSync, spawnSync } = require("node:child_process");
-const { existsSync, readdirSync } = require("node:fs");
-const { homedir } = require("node:os");
+const { existsSync, readdirSync, statSync, mkdirSync, rmSync } = require("node:fs");
+const { homedir, tmpdir } = require("node:os");
 const { dirname, join } = require("node:path");
 const readline = require("node:readline");
 const chalk = require("chalk");
@@ -48,50 +48,67 @@ function run(bin, args = []) {
 
 // ─── plugin path resolution ──────────────────────────────────────────────────
 
+const PLUGIN_GIT_URL = "https://github.com/GetUrBacon/bacon.git";
+
+// Recursively hunt for a file named `bacon-setup` under `root`. Claude Code's
+// on-disk plugin layout differs across versions (1.x vs 2.x put the marketplace
+// clone and the per-plugin cache in different places, at different depths), so
+// rather than hard-code those paths we just walk the tree. Depth-capped and
+// .git/node_modules-pruned so it stays fast.
+function findFileNamed(root, name, maxDepth = 7) {
+  if (!existsSync(root)) return null;
+  const stack = [[root, 0]];
+  while (stack.length) {
+    const [dir, depth] = stack.pop();
+    let entries;
+    try { entries = readdirSync(dir); } catch { continue; }
+    for (const entry of entries) {
+      const full = join(dir, entry);
+      if (entry === name) {
+        try { if (statSync(full).isFile()) return full; } catch { /* race */ }
+      }
+    }
+    if (depth >= maxDepth) continue;
+    for (const entry of entries) {
+      if (entry === ".git" || entry === "node_modules" || entry.startsWith(".")) continue;
+      const full = join(dir, entry);
+      try { if (statSync(full).isDirectory()) stack.push([full, depth + 1]); } catch { /* race */ }
+    }
+  }
+  return null;
+}
+
+// Locate an already-materialized bacon-setup that Claude Code placed on disk.
+// Returns null if Claude hasn't extracted the plugin yet (it materializes
+// lazily on some versions) — callers fall back to cloneBaconSetup().
 function findBaconSetup() {
   const pluginsRoot = join(homedir(), ".claude", "plugins");
+  return (
+    findFileNamed(pluginsRoot, "bacon-setup") ||
+    (() => { const w = run("which", ["bacon-setup"]); return w.ok ? w.out : null; })()
+  );
+}
 
-  // 1. The marketplace clone is written synchronously by
-  //    `claude plugin marketplace add` (step 2), so the binary is available
-  //    immediately — before Claude Code has ever launched. Layout is either
-  //    marketplaces/<org>/bin/bacon-setup (single-plugin repo at root) or
-  //    marketplaces/<org>/<plugin>/bin/bacon-setup (multi-plugin marketplace).
-  const marketRoot = join(pluginsRoot, "marketplaces");
-  if (existsSync(marketRoot)) {
-    for (const org of readdirSync(marketRoot)) {
-      const direct = join(marketRoot, org, "bin", "bacon-setup");
-      if (existsSync(direct)) return direct;
-      let subdirs;
-      try { subdirs = readdirSync(join(marketRoot, org)); } catch { continue; }
-      for (const sub of subdirs) {
-        const candidate = join(marketRoot, org, sub, "bin", "bacon-setup");
-        if (existsSync(candidate)) return candidate;
-      }
-    }
-  }
+// Version-independent fallback: clone the public plugin repo ourselves and run
+// bacon-setup from that copy. The clone is self-contained (carries bacon_core.py
+// and friends in bin/), so `python3 bacon-setup …` works regardless of whether
+// Claude Code has finished installing the plugin into its own cache yet.
+function cloneBaconSetup() {
+  if (!run("git", ["--version"]).ok) return null;
+  let dest = join(homedir(), ".bacon", "plugin-src");
+  try { mkdirSync(dirname(dest), { recursive: true }); }
+  catch { dest = join(tmpdir(), "bacon-plugin-src"); }
+  try { rmSync(dest, { recursive: true, force: true }); } catch { /* fresh */ }
+  const r = spawnSync("git", ["clone", "--depth", "1", PLUGIN_GIT_URL, dest], { stdio: "pipe" });
+  if (r.status !== 0) return null;
+  const candidate = join(dest, "bin", "bacon-setup");
+  return existsSync(candidate) ? candidate : null;
+}
 
-  // 2. The versioned cache is materialized lazily — only once Claude Code
-  //    launches and loads the enabled plugin. Present on machines that have
-  //    already run Claude after install.
-  const cacheRoot = join(pluginsRoot, "cache");
-  if (existsSync(cacheRoot)) {
-    for (const org of readdirSync(cacheRoot)) {
-      let repos;
-      try { repos = readdirSync(join(cacheRoot, org)); } catch { continue; }
-      for (const repo of repos) {
-        let versions;
-        try { versions = readdirSync(join(cacheRoot, org, repo)); } catch { continue; }
-        for (const ver of versions) {
-          const candidate = join(cacheRoot, org, repo, ver, "bin", "bacon-setup");
-          if (existsSync(candidate)) return candidate;
-        }
-      }
-    }
-  }
-
-  const which = run("which", ["bacon-setup"]);
-  if (which.ok) return which.out;
-  return null;
+// Guaranteed resolver used by the setup steps: prefer Claude's own copy, else
+// self-clone. Only returns null if both disk lookup AND git clone fail.
+function ensureBaconSetup() {
+  return findBaconSetup() || cloneBaconSetup();
 }
 
 // ─── steps ──────────────────────────────────────────────────────────────────
@@ -105,6 +122,11 @@ function checkNode() {
   ok(`Node.js ${process.versions.node}`);
 }
 
+// Below this major, Claude Code's plugin tooling/layout is old enough to cause
+// install quirks. We don't block on it (the self-clone fallback makes setup work
+// regardless) — just nudge the user to update.
+const MIN_CLAUDE_MAJOR = 2;
+
 function checkClaude() {
   const r = run("claude", ["--version"]);
   if (!r.ok) {
@@ -112,7 +134,23 @@ function checkClaude() {
     print(`  ${warn("→")} Install it from ${bright("https://claude.ai/code")} then re-run this wizard.`);
     process.exit(1);
   }
-  ok(`Claude Code ${mono(r.out.split("\n")[0])}`);
+  const versionLine = r.out.split("\n")[0];
+  ok(`Claude Code ${mono(versionLine)}`);
+
+  const m = versionLine.match(/(\d+)\.(\d+)\.(\d+)/);
+  const major = m ? parseInt(m[1], 10) : null;
+  if (major !== null && major < MIN_CLAUDE_MAJOR) {
+    print(`  ${warn("⚠")} ${warn(`Claude Code ${m[0]} is outdated — update for the smoothest setup.`)}`);
+    note("running: claude update");
+    const upd = spawnSync("claude", ["update"], { stdio: "pipe" });
+    const after = run("claude", ["--version"]);
+    const newVer = after.ok ? (after.out.match(/\d+\.\d+\.\d+/) || [])[0] : null;
+    if (upd.status === 0 && newVer && newVer !== m[0]) {
+      ok(`Updated to Claude Code ${mono(newVer)}`);
+    } else {
+      print(`  ${warn("→")} Couldn't auto-update. Run ${bright("claude update")} yourself when convenient (setup will still continue).`);
+    }
+  }
 }
 
 function installPlugin() {
@@ -317,9 +355,10 @@ async function main() {
   }
 
   step(3, TOTAL, "Initializing config");
-  const baconSetup = findBaconSetup();
+  const baconSetup = ensureBaconSetup();
   if (!baconSetup) {
-    fail("bacon-setup not found. Open Claude Code and run /bacon:setup");
+    fail("Could not locate or fetch bacon-setup.");
+    print(`  ${warn("→")} Open Claude Code and run ${bright("/bacon:setup")} to finish.`);
     process.exit(1);
   }
   runSetupInit(baconSetup);
