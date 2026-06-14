@@ -49,8 +49,31 @@ function run(bin, args = []) {
 // ─── plugin path resolution ──────────────────────────────────────────────────
 
 function findBaconSetup() {
-  // Look in the proper plugin cache location
-  const cacheRoot = join(homedir(), ".claude", "plugins", "cache");
+  const pluginsRoot = join(homedir(), ".claude", "plugins");
+
+  // 1. The marketplace clone is written synchronously by
+  //    `claude plugin marketplace add` (step 2), so the binary is available
+  //    immediately — before Claude Code has ever launched. Layout is either
+  //    marketplaces/<org>/bin/bacon-setup (single-plugin repo at root) or
+  //    marketplaces/<org>/<plugin>/bin/bacon-setup (multi-plugin marketplace).
+  const marketRoot = join(pluginsRoot, "marketplaces");
+  if (existsSync(marketRoot)) {
+    for (const org of readdirSync(marketRoot)) {
+      const direct = join(marketRoot, org, "bin", "bacon-setup");
+      if (existsSync(direct)) return direct;
+      let subdirs;
+      try { subdirs = readdirSync(join(marketRoot, org)); } catch { continue; }
+      for (const sub of subdirs) {
+        const candidate = join(marketRoot, org, sub, "bin", "bacon-setup");
+        if (existsSync(candidate)) return candidate;
+      }
+    }
+  }
+
+  // 2. The versioned cache is materialized lazily — only once Claude Code
+  //    launches and loads the enabled plugin. Present on machines that have
+  //    already run Claude after install.
+  const cacheRoot = join(pluginsRoot, "cache");
   if (existsSync(cacheRoot)) {
     for (const org of readdirSync(cacheRoot)) {
       let repos;
@@ -65,6 +88,7 @@ function findBaconSetup() {
       }
     }
   }
+
   const which = run("which", ["bacon-setup"]);
   if (which.ok) return which.out;
   return null;
