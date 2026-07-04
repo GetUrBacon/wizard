@@ -3,20 +3,25 @@ import { Box, Text } from 'ink';
 
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
-function Spinner() {
+// While `suspended` (a raw-stdio window is open — see withSuspendedRender in
+// useWizardSteps.js), the interval is skipped entirely so this component
+// never triggers a state change, and therefore never triggers an Ink
+// repaint, while a subprocess/readline/clack owns the terminal.
+function Spinner({ suspended }) {
   const [frameIndex, setFrameIndex] = React.useState(0);
 
   React.useEffect(() => {
+    if (suspended) return undefined;
     const interval = setInterval(() => {
       setFrameIndex((prev) => (prev + 1) % SPINNER_FRAMES.length);
     }, 80);
     return () => clearInterval(interval);
-  }, []);
+  }, [suspended]);
 
   return React.createElement(Text, { color: '#e9f1fc' }, SPINNER_FRAMES[frameIndex]);
 }
 
-function StepRow({ step, total }) {
+function StepRow({ step, total, suspended }) {
   const statusRow = (() => {
     switch (step.status) {
       case 'pending':
@@ -31,7 +36,7 @@ function StepRow({ step, total }) {
           Box,
           null,
           React.createElement(Text, null, '  '),
-          React.createElement(Spinner),
+          React.createElement(Spinner, { suspended }),
           React.createElement(Text, null, ' '),
           React.createElement(Text, { color: '#e9f1fc' }, step.activeLabel ?? step.label)
         );
@@ -75,10 +80,10 @@ function StepRow({ step, total }) {
   );
 }
 
-export default function StepList({ steps, total }) {
+export default function StepList({ steps, total, suspended = false }) {
   return React.createElement(
     Box,
     { flexDirection: 'column' },
-    steps.map((step) => React.createElement(StepRow, { key: step.n, step, total }))
+    steps.map((step) => React.createElement(StepRow, { key: step.n, step, total, suspended }))
   );
 }

@@ -85,59 +85,56 @@ export function useWizardSteps(labels) {
 }
 
 /**
- * Cleanly tear down an Ink render tree, hand the terminal back to a raw
- * `stdio: 'inherit'` child process, run `fn`, and return its result. The
- * caller is responsible for mounting a fresh Ink tree afterward — this
- * helper does not re-render/resume Ink itself.
+ * Hand the terminal to a raw-stdio operation (a `stdio: 'inherit'` child
+ * process, `readline`, or `@clack/prompts`) without tearing down Ink's
+ * render tree, and return the operation's result.
  *
- * This exists because wizard.js's `runSetupInit()` and `runLogin()` run
- * `spawnSync("python3", [...], { stdio: "inherit" })` — a live Clerk-login
- * browser flow / live python3 output that needs direct, unshared control of
- * the terminal (including stdin). If Ink is still mounted (which puts stdin
- * into resumed/raw mode to read keypresses) when that subprocess starts,
- * the child can't reliably read/write the terminal — this shows up as a
- * broken login flow, swallowed keystrokes, or terminal corruption after the
- * child exits.
+ * Ink is kept mounted the *whole* wizard run — a single `render()` call in
+ * main(), a single `unmount()` at the very end. Earlier this helper used to
+ * fully `unmount()`/remount Ink around every raw-stdio window, but each
+ * remount is a brand-new Ink instance with no memory of the terminal real
+ * estate the previous instance already painted, so it repainted the entire
+ * tree (banner included) again from scratch below the old frame — that's
+ * the duplicate-banner bug seen in real runs. Neither Banner.js nor
+ * StepList.js calls Ink's `useInput`, so Ink never actually engages stdin
+ * raw mode in this app (confirmed against ink's App.js: raw mode is only
+ * toggled by `useInput`/`useFocus` consumers) — there's no raw-mode
+ * contention with readline/clack to unmount for in the first place.
+ *
+ * The one thing that IS still required here is `inkInstance.clear()`
+ * (log-update's line-eraser) immediately before `fn()` runs. It resets
+ * log-update's internal `previousLineCount` to 0. Without it, the *next*
+ * repaint after this window (e.g. the following `okStep()`/`failStep()`
+ * call) would erase N lines counting from wherever the cursor currently
+ * sits — which by then is inside the subprocess's or clack's own output,
+ * not Ink's last frame — silently eating the last few lines of whatever
+ * they printed. Do not drop this call even though `.unmount()` is gone.
+ *
+ * The caller is expected to freeze any self-driven re-renders (e.g. the
+ * StepList spinner's own `setInterval`) via a `suspended` prop before
+ * calling this, and un-freeze after — see `suspend()` in bin/wizard.cjs.
+ * The two `spawnSync(..., {stdio:'inherit'})` callers of this (`bacon-setup
+ * init`, login) block Node's event loop entirely, so Ink structurally
+ * cannot write during those windows regardless. The `@clack/prompts` and
+ * "press ENTER" windows keep the event loop alive, so a terminal-resize
+ * event during those could in principle trigger Ink's own resize-driven
+ * repaint mid-window — accepted as a narrow, low-probability edge case
+ * rather than engineered away, given this is a short one-shot CLI.
  *
  * @template T
- * @param {{ unmount: () => void, clear?: () => void, rerender?: Function }} inkInstance
+ * @param {{ clear?: () => void }} inkInstance
  *   The object returned by ink's `render(...)`.
  * @param {() => (T | Promise<T>)} fn
- *   Callback performing the raw-terminal-owning operation (e.g. the
- *   spawnSync(..., { stdio: 'inherit' }) call).
+ *   Callback performing the raw-terminal-owning operation.
  * @returns {Promise<T>}
  */
 export async function withSuspendedRender(inkInstance, fn) {
-  // Clear whatever Ink last painted, then unmount so Ink releases the
-  // terminal (stops re-rendering, detaches its stdin listeners) before the
-  // child process takes over stdio directly.
   if (inkInstance && typeof inkInstance.clear === "function") {
     try {
       inkInstance.clear();
     } catch {
-      // Best-effort — a failed clear must never block teardown.
+      // Best-effort — a failed clear must never block the operation.
     }
   }
-  if (inkInstance && typeof inkInstance.unmount === "function") {
-    inkInstance.unmount();
-  }
-
-  // Ink resumes stdin and (on a TTY) sets raw mode while it owns the
-  // terminal, so keypresses are delivered to it a byte at a time. A
-  // spawnSync child with stdio: 'inherit' needs stdin left in a normal,
-  // paused-from-our-side state — otherwise the child can fail to read
-  // input at all, or input can be split between us and the child.
-  const stdin = process.stdin;
-  if (stdin && stdin.isTTY && typeof stdin.setRawMode === "function" && stdin.isRaw) {
-    stdin.setRawMode(false);
-  }
-  if (stdin && typeof stdin.pause === "function") {
-    stdin.pause();
-  }
-
-  // Run the caller's raw-terminal operation and propagate its result (or
-  // its error) unchanged. We intentionally do not resume/re-render Ink
-  // here: the caller decides when/whether to mount a fresh Ink tree once
-  // this resolves.
   return await fn();
 }

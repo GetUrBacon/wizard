@@ -11,16 +11,15 @@ const chalk = require("chalk");
 // ─── helpers ────────────────────────────────────────────────────────────────
 //
 // These chalk-based helpers are only used for plain terminal output that
-// happens while the Ink step-list tree is intentionally unmounted/suspended
-// (see `suspend()` in main()) — e.g. the "press ENTER" prompt before the
-// Clerk login subprocess, or the final done screen after the wizard exits
-// Ink for good. All *step progress* (the persistent step list) is rendered
-// through src/ui/StepList.js + src/ui/useWizardSteps.js instead.
+// happens while Ink's spinner is frozen and the terminal is on loan to a raw
+// subprocess/prompt (see `suspend()` in main()) — e.g. the "press ENTER"
+// prompt before the Clerk login subprocess. All *step progress* (the
+// persistent step list) is rendered through src/ui/StepList.js +
+// src/ui/useWizardSteps.js instead, and the final done screen is now
+// src/ui/OutroScreen.js, part of the same persistent Ink tree.
 
-const green  = chalk.hex("#36e85a");
 const dim    = chalk.hex("#74849e");
 const bright = chalk.hex("#e9f1fc");
-const warn   = chalk.hex("#f5a623");
 const mono   = chalk.hex("#8a9bb5");
 
 function print(...lines) {
@@ -185,10 +184,10 @@ function installPlugin(steps) {
   return false;
 }
 
-// `suspend(fn)` (built in main()) tears down the Ink tree via
-// withSuspendedRender() before running `fn`, then remounts it afterward — the
-// spawnSync(..., { stdio: 'inherit' }) call below needs direct, unshared
-// control of the terminal.
+// `suspend(fn)` (built in main()) freezes the StepList spinner and calls
+// withSuspendedRender() (clear, no unmount) before running `fn`, then
+// un-freezes afterward — the spawnSync(..., { stdio: 'inherit' }) call below
+// needs the terminal free of any concurrent Ink-driven repaints.
 async function runSetupInit(steps, baconSetup, suspend) {
   steps.addNote(3, "running: bacon-setup init");
   const r = await suspend(() => spawnSync("python3", [baconSetup, "init"], { stdio: "inherit" }));
@@ -220,7 +219,7 @@ async function runLogin(steps, baconSetup, suspend) {
   return true;
 }
 
-async function configurePreferences(baconSetup, p) {
+async function configurePreferences(baconSetup, p, exitWith) {
   // Arrow-key driven preferences via @clack/prompts (`p`). Frequency +
   // personalization go to the local config via bacon-config. Surfaces are a
   // multi-select: in-reply (default on; the advertiser — not the user — picks
@@ -236,7 +235,7 @@ async function configurePreferences(baconSetup, p) {
   const guard = (v) => {
     if (p.isCancel(v)) {
       p.cancel("Setup cancelled — finish anytime with /bacon:config");
-      process.exit(0);
+      exitWith(0); // routes through Ink's unmount() instead of a bare process.exit
     }
     return v;
   };
@@ -297,28 +296,6 @@ function markOnboarded(baconSetup) {
   return r.status === 0;
 }
 
-function showDone(loggedIn) {
-  print(
-    "",
-    `  ${dim("─".repeat(48))}`,
-    "",
-    `  ${green("✓ Bacon is set up!")}`,
-    "",
-    loggedIn
-      ? `  ${bright("Dashboard →")}  ${mono("https://geturbacon.dev/dashboard")}`
-      : `  ${warn("→")} Connect later:  ${mono("bacon-setup login")}`,
-    "",
-    `  ${dim("Ads appear occasionally in Claude Code.")}`,
-    `  ${dim("Your prompts never leave your machine.")}`,
-    "",
-    `  ${dim("configure")}  ${mono("bacon-config show")}`,
-    `  ${dim("pause     ")}  ${mono("bacon-config pause")}`,
-    "",
-    `  ${dim("─".repeat(48))}`,
-    ""
-  );
-}
-
 // ─── main ────────────────────────────────────────────────────────────────────
 
 const STEP_LABELS = [
@@ -334,64 +311,82 @@ async function main() {
   // from this CJS bin, same pattern already used for @clack/prompts below.
   const [
     { default: React },
-    { render },
+    { render, Static },
     { default: Banner },
     { default: StepList },
+    { default: OutroScreen },
     { useWizardSteps, withSuspendedRender },
   ] = await Promise.all([
     import("react"),
     import("ink"),
     import("../src/ui/Banner.js"),
     import("../src/ui/StepList.js"),
+    import("../src/ui/OutroScreen.js"),
     import("../src/ui/useWizardSteps.js"),
   ]);
 
-  // `controllerRef` always points at the {steps, startStep, okStep, failStep,
-  // addNote} object from the currently-mounted useWizardSteps() instance.
-  // `eventLog` records every call made through the `steps` facade below so
-  // that when we suspend Ink (unmounting the tree — and with it, the hook's
-  // internal state) and remount afterward, replay() can reconstruct the
-  // exact prior on-screen state on the fresh hook instance before continuing.
+  // One persistent Ink instance for the whole process — render() is called
+  // exactly once here, unmount() exactly once at the end (or on a fatal
+  // exit). Earlier this app fully unmounted/remounted Ink around every
+  // raw-stdio window, which repainted the entire tree (banner included)
+  // from scratch each time — see the doc comment on withSuspendedRender()
+  // in useWizardSteps.js for the full explanation of why that duplicated
+  // output and why a single persistent instance fixes it structurally.
+  //
+  // `controllerRef` points at the current render's { steps, startStep,
+  // okStep, failStep, addNote, setStage, setSuspended, setLoggedIn }
+  // bundle. No eventLog/replay is needed anymore — there's only ever one
+  // hook instance for the life of the process.
   const controllerRef = { current: null };
-  const eventLog = [];
-
-  const steps = {
-    startStep: (...a) => { eventLog.push(["startStep", a]); controllerRef.current.startStep(...a); },
-    okStep:    (...a) => { eventLog.push(["okStep", a]);    controllerRef.current.okStep(...a); },
-    failStep:  (...a) => { eventLog.push(["failStep", a]);  controllerRef.current.failStep(...a); },
-    addNote:   (...a) => { eventLog.push(["addNote", a]);   controllerRef.current.addNote(...a); },
-  };
-
-  function replay() {
-    for (const [fn, args] of eventLog) controllerRef.current[fn](...args);
-  }
 
   function App() {
     const wiz = useWizardSteps(STEP_LABELS);
-    controllerRef.current = wiz;
+    const [stage, setStage] = React.useState("run");
+    const [suspended, setSuspended] = React.useState(false);
+    const [loggedIn, setLoggedIn] = React.useState(false);
+    controllerRef.current = { ...wiz, setStage, setSuspended, setLoggedIn };
+
     return React.createElement(
       React.Fragment,
       null,
-      React.createElement(Banner),
-      React.createElement(StepList, { steps: wiz.steps, total: STEP_LABELS.length })
+      // Banner is committed once via <Static> and never revisited — Ink
+      // guarantees Static items are painted exactly once and left alone,
+      // which is what makes banner duplication structurally impossible
+      // here rather than just "unlikely."
+      React.createElement(
+        Static,
+        { items: ["banner"] },
+        (item) => React.createElement(Banner, { key: item })
+      ),
+      // The step list stays on screen at outro (matching the old behavior
+      // where showDone() printed below the persisted step list) — it's no
+      // longer receiving updates by the time stage flips to "outro", so
+      // leaving it mounted just shows the final completed checklist above
+      // the summary card rather than replacing it.
+      React.createElement(StepList, { steps: wiz.steps, total: STEP_LABELS.length, suspended }),
+      stage === "outro" ? React.createElement(OutroScreen, { loggedIn }) : null
     );
   }
 
-  function mount() {
-    const instance = render(React.createElement(App));
-    replay();
-    return instance;
-  }
+  const inkInstance = render(React.createElement(App));
 
-  let inkInstance = mount();
+  const steps = {
+    startStep: (...a) => controllerRef.current.startStep(...a),
+    okStep:    (...a) => controllerRef.current.okStep(...a),
+    failStep:  (...a) => controllerRef.current.failStep(...a),
+    addNote:   (...a) => controllerRef.current.addNote(...a),
+  };
 
-  // Wraps withSuspendedRender(): tears Ink down, runs `fn` with the terminal
-  // to itself, then remounts a fresh Ink tree (replaying prior state onto it)
-  // before returning `fn`'s result to the caller.
+  // Freezes the StepList spinner (so it can't self-trigger a repaint),
+  // hands the terminal to `fn` via withSuspendedRender() (clear, but no
+  // unmount), then un-freezes.
   async function suspend(fn) {
-    const result = await withSuspendedRender(inkInstance, fn);
-    inkInstance = mount();
-    return result;
+    controllerRef.current.setSuspended(true);
+    try {
+      return await withSuspendedRender(inkInstance, fn);
+    } finally {
+      controllerRef.current.setSuspended(false);
+    }
   }
 
   function exitWith(code) {
@@ -427,17 +422,22 @@ async function main() {
   // Step 4 — connect account
   steps.startStep(4);
   const loggedIn = await runLogin(steps, baconSetup, suspend);
+  controllerRef.current.setLoggedIn(loggedIn);
 
   // Step 5 — ad preferences (@clack/prompts, ESM-only, dynamic import)
   steps.startStep(5);
   const clack = await import("@clack/prompts");
-  await suspend(() => configurePreferences(baconSetup, clack));
+  await suspend(() => configurePreferences(baconSetup, clack, exitWith));
   const onboarded = markOnboarded(baconSetup);
   if (!onboarded) steps.addNote(5, "Could not mark onboarding complete");
   steps.okStep(5, "Preferences saved");
 
+  controllerRef.current.setStage("outro");
+  // Give React/Ink one tick to commit the outro frame before we tear the
+  // tree down — unmounting synchronously right after setStage() risks
+  // racing the state update's commit.
+  await new Promise((resolve) => setTimeout(resolve, 50));
   inkInstance.unmount();
-  showDone(loggedIn);
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });
