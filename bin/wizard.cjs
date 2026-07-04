@@ -150,9 +150,10 @@ async function ensureBaconSetup() {
 // the old chalk-based step()/ok()/fail()/note() console helpers 1:1 in terms
 // of business logic and message text; only the rendering path changed.
 
-function checkNode(steps) {
+async function checkNode(steps) {
   const major = parseInt(process.versions.node.split(".")[0], 10);
   if (major < 18) {
+    await steps.holdMin(1);
     steps.failStep(1, `Node.js 18+ required (you have ${process.versions.node})`);
     return false;
   }
@@ -168,6 +169,7 @@ const MIN_CLAUDE_MAJOR = 2;
 async function checkClaude(steps) {
   const r = run("claude", ["--version"]);
   if (!r.ok) {
+    await steps.holdMin(1);
     steps.failStep(1, "Claude Code CLI not found.");
     steps.addNote(1, "Install it from https://claude.ai/code then re-run this wizard.");
     return false;
@@ -189,6 +191,7 @@ async function checkClaude(steps) {
     }
   }
 
+  await steps.holdMin(1);
   steps.okStep(1, `Claude Code ${versionLine}`);
   return true;
 }
@@ -205,6 +208,7 @@ async function installPlugin(steps) {
     "claude", ["plugin", "install", "bacon@GetUrBacon"]
   );
 
+  await steps.holdMin(2);
   if (install.status === 0) {
     steps.okStep(2, "Plugin installed via marketplace");
     return true;
@@ -232,6 +236,7 @@ async function installPlugin(steps) {
 async function runSetupInit(steps, baconSetup) {
   steps.addNote(3, "running: bacon-setup init");
   const r = await spawnAsync("python3", [baconSetup, "init"]);
+  await steps.holdMin(3);
   if (r.status !== 0) {
     steps.failStep(3, "Setup init failed — continuing anyway");
   } else {
@@ -446,11 +451,37 @@ async function main() {
   await new Promise((resolve) => setTimeout(resolve, 700));
   controllerRef.current.setStage("run");
 
+  // Steps 1–3 do their real work (version checks, plugin lookup, config
+  // init) in tens of milliseconds — fast enough that even with a real event-
+  // loop tick between startStep() and the ok/fail call (see tick()/
+  // spawnAsync above), the "running" spinner is only ever on screen for a
+  // single render frame. That's real, correctly-painted output, but it's too
+  // brief for a human to perceive as "it ran" — it still reads as an
+  // instant jump from pending to done. holdMin(n) is a deliberate minimum-
+  // visible-duration floor (the same "debounced spinner" pattern web UIs use
+  // for fast API calls): each check function awaits it immediately before
+  // its terminal okStep/failStep call, so the running state stays on screen
+  // for at least MIN_STEP_RUNNING_MS regardless of how fast the underlying
+  // check actually was. Steps 4/5 never call this — they're already gated
+  // on real human interaction (browser login, arrow-key menus) and take
+  // seconds regardless.
+  const MIN_STEP_RUNNING_MS = 400;
+  const stepStartedAt = new Map();
+
   const steps = {
-    startStep: (...a) => controllerRef.current.startStep(...a),
+    startStep: (...a) => {
+      stepStartedAt.set(a[0], Date.now());
+      return controllerRef.current.startStep(...a);
+    },
     okStep:    (...a) => controllerRef.current.okStep(...a),
     failStep:  (...a) => controllerRef.current.failStep(...a),
     addNote:   (...a) => controllerRef.current.addNote(...a),
+    async holdMin(n) {
+      const startedAt = stepStartedAt.get(n);
+      if (startedAt == null) return;
+      const remaining = MIN_STEP_RUNNING_MS - (Date.now() - startedAt);
+      if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
+    },
   };
 
   // Freezes the StepList spinner (so it can't self-trigger a repaint),
@@ -505,7 +536,7 @@ async function main() {
   // Step 1 — prerequisites
   steps.startStep(1);
   await tick();
-  if (!checkNode(steps)) { exitWith(1); return; }
+  if (!(await checkNode(steps))) { exitWith(1); return; }
   if (!(await checkClaude(steps))) { exitWith(1); return; }
 
   // Step 2 — plugin install (skip entirely if already installed)
