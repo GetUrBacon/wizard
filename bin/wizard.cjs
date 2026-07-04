@@ -9,23 +9,23 @@ const readline = require("node:readline");
 const chalk = require("chalk");
 
 // ─── helpers ────────────────────────────────────────────────────────────────
+//
+// These chalk-based helpers are only used for plain terminal output that
+// happens while the Ink step-list tree is intentionally unmounted/suspended
+// (see `suspend()` in main()) — e.g. the "press ENTER" prompt before the
+// Clerk login subprocess, or the final done screen after the wizard exits
+// Ink for good. All *step progress* (the persistent step list) is rendered
+// through src/ui/StepList.js + src/ui/useWizardSteps.js instead.
 
 const green  = chalk.hex("#36e85a");
 const dim    = chalk.hex("#74849e");
 const bright = chalk.hex("#e9f1fc");
 const warn   = chalk.hex("#f5a623");
-const error  = chalk.hex("#e85a5a");
 const mono   = chalk.hex("#8a9bb5");
 
 function print(...lines) {
   for (const l of lines) process.stdout.write(l + "\n");
 }
-function step(n, total, label) {
-  print(`\n${dim(`[${n}/${total}]`)} ${bright(label)}`);
-}
-function ok(msg)   { print(`  ${green("✓")} ${msg}`); }
-function fail(msg) { print(`  ${error("✗")} ${msg}`); }
-function note(msg) { print(`  ${dim("·")} ${dim(msg)}`); }
 
 function prompt(question) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -112,14 +112,21 @@ function ensureBaconSetup() {
 }
 
 // ─── steps ──────────────────────────────────────────────────────────────────
+//
+// Each function below takes `steps` — a small facade over the object returned
+// by useWizardSteps() (see main()) exposing startStep/okStep/failStep/addNote,
+// always 1-based to match the on-screen "[n/total]" numbering. They replace
+// the old chalk-based step()/ok()/fail()/note() console helpers 1:1 in terms
+// of business logic and message text; only the rendering path changed.
 
-function checkNode() {
+function checkNode(steps) {
   const major = parseInt(process.versions.node.split(".")[0], 10);
   if (major < 18) {
-    fail(`Node.js 18+ required (you have ${process.versions.node})`);
-    process.exit(1);
+    steps.failStep(1, `Node.js 18+ required (you have ${process.versions.node})`);
+    return false;
   }
-  ok(`Node.js ${process.versions.node}`);
+  steps.addNote(1, `Node.js ${process.versions.node}`);
+  return true;
 }
 
 // Below this major, Claude Code's plugin tooling/layout is old enough to cause
@@ -127,79 +134,89 @@ function checkNode() {
 // regardless) — just nudge the user to update.
 const MIN_CLAUDE_MAJOR = 2;
 
-function checkClaude() {
+function checkClaude(steps) {
   const r = run("claude", ["--version"]);
   if (!r.ok) {
-    fail("Claude Code CLI not found.");
-    print(`  ${warn("→")} Install it from ${bright("https://claude.ai/code")} then re-run this wizard.`);
-    process.exit(1);
+    steps.failStep(1, "Claude Code CLI not found.");
+    steps.addNote(1, "Install it from https://claude.ai/code then re-run this wizard.");
+    return false;
   }
   const versionLine = r.out.split("\n")[0];
-  ok(`Claude Code ${mono(versionLine)}`);
 
   const m = versionLine.match(/(\d+)\.(\d+)\.(\d+)/);
   const major = m ? parseInt(m[1], 10) : null;
   if (major !== null && major < MIN_CLAUDE_MAJOR) {
-    print(`  ${warn("⚠")} ${warn(`Claude Code ${m[0]} is outdated — update for the smoothest setup.`)}`);
-    note("running: claude update");
+    steps.addNote(1, `Claude Code ${m[0]} is outdated — update for the smoothest setup.`);
+    steps.addNote(1, "running: claude update");
     const upd = spawnSync("claude", ["update"], { stdio: "pipe" });
     const after = run("claude", ["--version"]);
     const newVer = after.ok ? (after.out.match(/\d+\.\d+\.\d+/) || [])[0] : null;
     if (upd.status === 0 && newVer && newVer !== m[0]) {
-      ok(`Updated to Claude Code ${mono(newVer)}`);
+      steps.addNote(1, `Updated to Claude Code ${newVer}`);
     } else {
-      print(`  ${warn("→")} Couldn't auto-update. Run ${bright("claude update")} yourself when convenient (setup will still continue).`);
+      steps.addNote(1, "Couldn't auto-update. Run `claude update` yourself when convenient (setup will still continue).");
     }
   }
+
+  steps.okStep(1, `Claude Code ${versionLine}`);
+  return true;
 }
 
-function installPlugin() {
+function installPlugin(steps) {
   // Add the Bacon marketplace then install the plugin through it
-  note("running: claude plugin marketplace add GetUrBacon/bacon");
-  const addMarket = spawnSync(
+  steps.addNote(2, "running: claude plugin marketplace add GetUrBacon/bacon");
+  spawnSync(
     "claude", ["plugin", "marketplace", "add", "GetUrBacon/bacon"],
     { stdio: "pipe" }
   );
 
-  note("running: claude plugin install bacon@GetUrBacon");
+  steps.addNote(2, "running: claude plugin install bacon@GetUrBacon");
   const install = spawnSync(
     "claude", ["plugin", "install", "bacon@GetUrBacon"],
     { stdio: "pipe" }
   );
 
   if (install.status === 0) {
-    ok("Plugin installed via marketplace");
-    return;
+    steps.okStep(2, "Plugin installed via marketplace");
+    return true;
   }
 
-  fail("Plugin install failed — run `/plugin marketplace add GetUrBacon/bacon` then `/plugin install bacon@GetUrBacon` manually.");
-  process.exit(1);
+  steps.failStep(2, "Plugin install failed — run `/plugin marketplace add GetUrBacon/bacon` then `/plugin install bacon@GetUrBacon` manually.");
+  return false;
 }
 
-function runSetupInit(baconSetup) {
-  note("running: bacon-setup init");
-  const r = spawnSync("python3", [baconSetup, "init"], { stdio: "inherit" });
+// `suspend(fn)` (built in main()) tears down the Ink tree via
+// withSuspendedRender() before running `fn`, then remounts it afterward — the
+// spawnSync(..., { stdio: 'inherit' }) call below needs direct, unshared
+// control of the terminal.
+async function runSetupInit(steps, baconSetup, suspend) {
+  steps.addNote(3, "running: bacon-setup init");
+  const r = await suspend(() => spawnSync("python3", [baconSetup, "init"], { stdio: "inherit" }));
   if (r.status !== 0) {
-    fail("Setup init failed — continuing anyway");
+    steps.failStep(3, "Setup init failed — continuing anyway");
   } else {
-    ok("Config initialized at ~/.bacon/config.json");
+    steps.okStep(3, "Config initialized at ~/.bacon/config.json");
   }
 }
 
-async function runLogin(baconSetup) {
-  print(
-    `\n  ${bright("Time to connect your account.")}`,
-    `  ${dim("Your browser will open to sign in with Clerk.")}`,
-    `  ${dim("No prompts, no typing — just click Allow.")}`
-  );
-  await prompt("Press ENTER to open the browser");
+async function runLogin(steps, baconSetup, suspend) {
+  // The "press ENTER" prompt and the login subprocess both need raw control
+  // of stdin/stdout, so the whole sequence runs inside the suspended window.
+  const r = await suspend(async () => {
+    print(
+      `\n  ${bright("Time to connect your account.")}`,
+      `  ${dim("Your browser will open to sign in with Clerk.")}`,
+      `  ${dim("No prompts, no typing — just click Allow.")}`
+    );
+    await prompt("Press ENTER to open the browser");
+    return spawnSync("python3", [baconSetup, "login"], { stdio: "inherit" });
+  });
 
-  const r = spawnSync("python3", [baconSetup, "login"], { stdio: "inherit" });
   if (r.status !== 0) {
-    fail("Login failed — run `bacon-setup login` manually to retry.");
+    steps.failStep(4, "Login failed — run `bacon-setup login` manually to retry.");
     return false;
   }
-  ok("Account connected");
+  steps.okStep(4, "Account connected");
   return true;
 }
 
@@ -209,6 +226,11 @@ async function configurePreferences(baconSetup, p) {
   // multi-select: in-reply (default on; the advertiser — not the user — picks
   // the strip/card/banner format) plus the statusline + thinking-verb opt-ins,
   // which are enabled via bacon-setup (they edit ~/.claude/settings.json).
+  //
+  // This whole function runs while the Ink step-list tree is suspended (see
+  // the `suspend()` call around it in main()) — @clack/prompts owns the
+  // terminal for the duration, so any incidental messages here go through
+  // plain print(), the same as the rest of the suspended-window output.
   const baconConfigPath = join(dirname(baconSetup), "bacon-config");
 
   const guard = (v) => {
@@ -220,7 +242,7 @@ async function configurePreferences(baconSetup, p) {
   };
   const setConfig = (cmd, value) => {
     const r = spawnSync("python3", [baconConfigPath, cmd, value], { stdio: "pipe" });
-    if (r.status !== 0) note(`Could not set ${cmd} to ${value}`);
+    if (r.status !== 0) print(`  ${dim("·")} ${dim(`Could not set ${cmd} to ${value}`)}`);
   };
 
   const frequency = guard(await p.select({
@@ -261,21 +283,18 @@ async function configurePreferences(baconSetup, p) {
   setConfig("inreply", surfaces.includes("inreply") ? "on" : "off");
   if (surfaces.includes("statusline")) {
     const r = spawnSync("python3", [baconSetup, "statusline-enable", "--style", "marquee"], { stdio: "pipe" });
-    if (r.status !== 0) note("Could not enable statusline");
+    if (r.status !== 0) print(`  ${dim("·")} ${dim("Could not enable statusline")}`);
   }
   if (surfaces.includes("spinner")) {
     const r = spawnSync("python3", [baconSetup, "spinner-enable"], { stdio: "pipe" });
-    if (r.status !== 0) note("Could not enable thinking verb");
+    if (r.status !== 0) print(`  ${dim("·")} ${dim("Could not enable thinking verb")}`);
   }
-  ok("Preferences saved");
 }
 
 function markOnboarded(baconSetup) {
   // Mark onboarding complete so /bacon:setup skill won't re-prompt later.
   const r = spawnSync("python3", [baconSetup, "onboarded"], { stdio: "pipe" });
-  if (r.status !== 0) {
-    note("Could not mark onboarding complete");
-  }
+  return r.status === 0;
 }
 
 function showDone(loggedIn) {
@@ -300,78 +319,124 @@ function showDone(loggedIn) {
   );
 }
 
-// ─── banner ──────────────────────────────────────────────────────────────────
-
-const BACON_ART = [
-  "  ██████╗  █████╗  ██████╗ ██████╗ ███╗   ██╗",
-  "  ██╔══██╗██╔══██╗██╔════╝██╔═══██╗████╗  ██║",
-  "  ██████╔╝███████║██║     ██║   ██║██╔██╗ ██║",
-  "  ██╔══██╗██╔══██║██║     ██║   ██║██║╚██╗██║",
-  "  ██████╔╝██║  ██║╚██████╗╚██████╔╝██║ ╚████║",
-  "  ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝",
-];
-
-const STRIP = [
-  "  ░░▓▓▓░░░░░▓▓▓░░░░░▓▓▓░░░░░▓▓▓░░░░░▓▓▓░░░░░▓▓▓░",
-  "  ▓▓░░░▓▓▓▓▓░░░▓▓▓▓▓░░░▓▓▓▓▓░░░▓▓▓▓▓░░░▓▓▓▓▓░░░▓▓",
-  "  ░░▓▓▓░░░░░▓▓▓░░░░░▓▓▓░░░░░▓▓▓░░░░░▓▓▓░░░░░▓▓▓░░",
-];
-
-function printBanner() {
-  print("");
-  for (const line of BACON_ART) print(green(line) + "  🥓");
-  print("");
-  for (const line of STRIP) {
-    // alternate fat (bright cream) and lean (green) chars
-    let out = "";
-    for (const ch of line) {
-      out += ch === "░" ? chalk.hex("#e9d9b8")(ch) : chalk.hex("#36e85a")(ch);
-    }
-    print(out);
-  }
-  print("");
-  print(`  ${bright("setup wizard")}  ${dim("·")}  ${dim("get paid to code")}`);
-  print(`  ${dim("─".repeat(48))}`);
-  print("");
-}
-
 // ─── main ────────────────────────────────────────────────────────────────────
 
+const STEP_LABELS = [
+  "Checking prerequisites",
+  "Installing Bacon plugin",
+  "Initializing config",
+  "Connecting your account",
+  "Choosing your ad preferences",
+];
+
 async function main() {
-  printBanner();
+  // Ink/React/the UI components are ESM-only; load them via dynamic import
+  // from this CJS bin, same pattern already used for @clack/prompts below.
+  const [
+    { default: React },
+    { render },
+    { default: Banner },
+    { default: StepList },
+    { useWizardSteps, withSuspendedRender },
+  ] = await Promise.all([
+    import("react"),
+    import("ink"),
+    import("../src/ui/Banner.js"),
+    import("../src/ui/StepList.js"),
+    import("../src/ui/useWizardSteps.js"),
+  ]);
 
-  const TOTAL = 5;
+  // `controllerRef` always points at the {steps, startStep, okStep, failStep,
+  // addNote} object from the currently-mounted useWizardSteps() instance.
+  // `eventLog` records every call made through the `steps` facade below so
+  // that when we suspend Ink (unmounting the tree — and with it, the hook's
+  // internal state) and remount afterward, replay() can reconstruct the
+  // exact prior on-screen state on the fresh hook instance before continuing.
+  const controllerRef = { current: null };
+  const eventLog = [];
 
-  step(1, TOTAL, "Checking prerequisites");
-  checkNode();
-  checkClaude();
+  const steps = {
+    startStep: (...a) => { eventLog.push(["startStep", a]); controllerRef.current.startStep(...a); },
+    okStep:    (...a) => { eventLog.push(["okStep", a]);    controllerRef.current.okStep(...a); },
+    failStep:  (...a) => { eventLog.push(["failStep", a]);  controllerRef.current.failStep(...a); },
+    addNote:   (...a) => { eventLog.push(["addNote", a]);   controllerRef.current.addNote(...a); },
+  };
 
+  function replay() {
+    for (const [fn, args] of eventLog) controllerRef.current[fn](...args);
+  }
+
+  function App() {
+    const wiz = useWizardSteps(STEP_LABELS);
+    controllerRef.current = wiz;
+    return React.createElement(
+      React.Fragment,
+      null,
+      React.createElement(Banner),
+      React.createElement(StepList, { steps: wiz.steps, total: STEP_LABELS.length })
+    );
+  }
+
+  function mount() {
+    const instance = render(React.createElement(App));
+    replay();
+    return instance;
+  }
+
+  let inkInstance = mount();
+
+  // Wraps withSuspendedRender(): tears Ink down, runs `fn` with the terminal
+  // to itself, then remounts a fresh Ink tree (replaying prior state onto it)
+  // before returning `fn`'s result to the caller.
+  async function suspend(fn) {
+    const result = await withSuspendedRender(inkInstance, fn);
+    inkInstance = mount();
+    return result;
+  }
+
+  function exitWith(code) {
+    try { inkInstance.unmount(); } catch { /* already unmounted */ }
+    process.exit(code);
+  }
+
+  // Step 1 — prerequisites
+  steps.startStep(1);
+  if (!checkNode(steps)) { exitWith(1); return; }
+  if (!checkClaude(steps)) { exitWith(1); return; }
+
+  // Step 2 — plugin install (skip entirely if already installed)
   const alreadyInstalled = !!findBaconSetup();
   if (alreadyInstalled) {
-    ok("Plugin already installed — skipping reinstall");
+    steps.okStep(2, "Plugin already installed — skipping reinstall");
   } else {
-    step(2, TOTAL, "Installing Bacon plugin");
-    installPlugin();
+    steps.startStep(2);
+    if (!installPlugin(steps)) { exitWith(1); return; }
   }
 
-  step(3, TOTAL, "Initializing config");
+  // Step 3 — config init
+  steps.startStep(3);
   const baconSetup = ensureBaconSetup();
   if (!baconSetup) {
-    fail("Could not locate or fetch bacon-setup.");
-    print(`  ${warn("→")} Open Claude Code and run ${bright("/bacon:setup")} to finish.`);
-    process.exit(1);
+    steps.failStep(3, "Could not locate or fetch bacon-setup.");
+    steps.addNote(3, "Open Claude Code and run /bacon:setup to finish.");
+    exitWith(1);
+    return;
   }
-  runSetupInit(baconSetup);
+  await runSetupInit(steps, baconSetup, suspend);
 
-  step(4, TOTAL, "Connecting your account");
-  const loggedIn = await runLogin(baconSetup);
+  // Step 4 — connect account
+  steps.startStep(4);
+  const loggedIn = await runLogin(steps, baconSetup, suspend);
 
-  step(5, TOTAL, "Choosing your ad preferences");
-  // @clack/prompts is ESM-only; load it via dynamic import from this CJS bin.
+  // Step 5 — ad preferences (@clack/prompts, ESM-only, dynamic import)
+  steps.startStep(5);
   const clack = await import("@clack/prompts");
-  await configurePreferences(baconSetup, clack);
-  markOnboarded(baconSetup);
+  await suspend(() => configurePreferences(baconSetup, clack));
+  const onboarded = markOnboarded(baconSetup);
+  if (!onboarded) steps.addNote(5, "Could not mark onboarding complete");
+  steps.okStep(5, "Preferences saved");
 
+  inkInstance.unmount();
   showDone(loggedIn);
 }
 
