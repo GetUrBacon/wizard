@@ -345,11 +345,11 @@ async function main() {
   ] = await Promise.all([
     import("react"),
     import("ink"),
-    import("../src/ui/Banner.js"),
-    import("../src/ui/HeaderBar.js"),
-    import("../src/ui/RunScreen.js"),
-    import("../src/ui/OutroScreen.js"),
-    import("../src/ui/useWizardSteps.js"),
+    import("../dist/ui/Banner.js"),
+    import("../dist/ui/HeaderBar.js"),
+    import("../dist/ui/RunScreen.js"),
+    import("../dist/ui/OutroScreen.js"),
+    import("../dist/ui/useWizardSteps.js"),
   ]);
 
   // One persistent Ink instance for the whole process — render() is called

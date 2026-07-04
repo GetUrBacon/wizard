@@ -1,9 +1,6 @@
 import React from 'react';
 import { Box, Text } from 'ink';
-
-const DIM = '#74849e';
-const BRIGHT = '#e9f1fc';
-const GREEN = '#36e85a';
+import { DIM, BRIGHT, GREEN } from './theme.js';
 
 // Real facts about the Bacon ad network — not fabricated data. Unlike
 // PostHog's Learn deck (which visualizes the user's own product analytics),
@@ -55,14 +52,20 @@ export default function LearnPane({ suspended = false }) {
 
   const blurb = BLURBS[index];
 
-  return React.createElement(
-    Box,
-    { flexDirection: 'column' },
-    React.createElement(Text, { color: GREEN, bold: true }, 'Learn'),
-    React.createElement(Text),
-    React.createElement(Text, { color: BRIGHT, bold: true }, blurb.heading),
-    ...blurb.lines.map((line, i) =>
-      React.createElement(Text, { key: `line-${i}`, color: DIM }, line)
-    )
+  return (
+    <Box flexDirection="column">
+      <Text color={GREEN} bold>
+        Learn
+      </Text>
+      <Text />
+      <Text color={BRIGHT} bold>
+        {blurb.heading}
+      </Text>
+      {blurb.lines.map((line, i) => (
+        <Text key={`line-${i}`} color={DIM}>
+          {line}
+        </Text>
+      ))}
+    </Box>
   );
 }

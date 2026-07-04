@@ -9,18 +9,14 @@ import StepList from './StepList.js';
 // (unlike PostHog's own analytics), so it cycles real product facts instead
 // — see LearnPane.js.
 export default function RunScreen({ steps, total, suspended }) {
-  return React.createElement(
-    Box,
-    { flexDirection: 'row', gap: 3 },
-    React.createElement(
-      Box,
-      { width: '50%', flexDirection: 'column' },
-      React.createElement(LearnPane, { suspended })
-    ),
-    React.createElement(
-      Box,
-      { width: '50%', flexDirection: 'column' },
-      React.createElement(StepList, { steps, total, suspended })
-    )
+  return (
+    <Box flexDirection="row" gap={3}>
+      <Box width="50%" flexDirection="column">
+        <LearnPane suspended={suspended} />
+      </Box>
+      <Box width="50%" flexDirection="column">
+        <StepList steps={steps} total={total} suspended={suspended} />
+      </Box>
+    </Box>
   );
 }
