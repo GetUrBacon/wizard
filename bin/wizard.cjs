@@ -216,11 +216,22 @@ async function installPlugin(steps) {
 
 // `suspend(fn)` (built in main()) freezes the StepList spinner and calls
 // withSuspendedRender() (clear, no unmount) before running `fn`, then
-// un-freezes afterward — the spawnSync(..., { stdio: 'inherit' }) call below
-// needs the terminal free of any concurrent Ink-driven repaints.
-async function runSetupInit(steps, baconSetup, suspend) {
+// un-freezes afterward.
+//
+// `bacon-setup init` is a one-shot, non-interactive check (it just writes
+// config and returns a status code — nothing here ever reads from stdin),
+// so unlike the login step below it has no need for `stdio: 'inherit'` or a
+// suspended window at all. It used to run with inherited stdio, which let
+// the script's own "✅ Config ready…" print land directly on the terminal
+// while step 3's live (not-yet-Static) row had just been erased for it —
+// the raw line then sat ABOVE this step's own heading once Ink resumed and
+// flushed the finished row below wherever the subprocess had left the
+// cursor. Piping stdio (spawnAsync's default) silences that duplicate,
+// out-of-order line entirely and lets the spinner keep animating too,
+// since spawnAsync doesn't block the event loop the way spawnSync did.
+async function runSetupInit(steps, baconSetup) {
   steps.addNote(3, "running: bacon-setup init");
-  const r = await suspend(() => spawnSync("python3", [baconSetup, "init"], { stdio: "inherit" }));
+  const r = await spawnAsync("python3", [baconSetup, "init"]);
   if (r.status !== 0) {
     steps.failStep(3, "Setup init failed — continuing anyway");
   } else {
@@ -517,7 +528,7 @@ async function main() {
     exitWith(1);
     return;
   }
-  await runSetupInit(steps, baconSetup, suspend);
+  await runSetupInit(steps, baconSetup);
 
   // Step 4 — connect account
   steps.startStep(4);
