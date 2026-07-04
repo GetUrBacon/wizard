@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 "use strict";
 
-const { execFileSync, spawnSync } = require("node:child_process");
+const { execFileSync, spawn, spawnSync } = require("node:child_process");
 const { existsSync, readdirSync, statSync, mkdirSync, rmSync } = require("node:fs");
 const { homedir, tmpdir } = require("node:os");
 const { dirname, join } = require("node:path");
@@ -44,6 +44,38 @@ function run(bin, args = []) {
     return { ok: false, out: e.stderr?.trim() ?? e.message };
   }
 }
+
+// Non-blocking counterpart to spawnSync. The steps that call this do real
+// network/subprocess work (marketplace add, plugin install, git clone,
+// `claude update`) that can take multiple seconds — spawnSync would freeze
+// the entire event loop for that whole duration, which starves Ink of every
+// tick it needs to paint the "running" spinner (the spinner's own
+// setInterval can't fire, and no repaint can be written to stdout, while
+// the thread is blocked in a sync syscall). spawn() lets Node's event loop
+// keep running while the subprocess is alive, so the spinner animates for
+// real instead of the screen freezing and then jumping straight to done.
+function spawnAsync(bin, args = [], opts = {}) {
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn(bin, args, { stdio: "pipe", ...opts });
+    } catch {
+      resolve({ status: 1 });
+      return;
+    }
+    child.on("error", () => resolve({ status: 1 }));
+    child.on("close", (status) => resolve({ status }));
+  });
+}
+
+// Yields one event-loop turn so a state update just queued (e.g. a
+// startStep() call) gets a chance to actually commit and flush to the
+// terminal before the next line of code runs. Without this, a step that
+// starts and finishes within the same synchronous call stack (no await in
+// between) never gets its "running" frame painted at all — React batches
+// the running->ok transition and only the final state is ever written to
+// stdout, so the step visually jumps straight from pending to done.
+const tick = () => new Promise((resolve) => setImmediate(resolve));
 
 // ─── plugin path resolution ──────────────────────────────────────────────────
 
@@ -92,13 +124,13 @@ function findBaconSetup() {
 // bacon-setup from that copy. The clone is self-contained (carries bacon_core.py
 // and friends in bin/), so `python3 bacon-setup …` works regardless of whether
 // Claude Code has finished installing the plugin into its own cache yet.
-function cloneBaconSetup() {
+async function cloneBaconSetup() {
   if (!run("git", ["--version"]).ok) return null;
   let dest = join(homedir(), ".bacon", "plugin-src");
   try { mkdirSync(dirname(dest), { recursive: true }); }
   catch { dest = join(tmpdir(), "bacon-plugin-src"); }
   try { rmSync(dest, { recursive: true, force: true }); } catch { /* fresh */ }
-  const r = spawnSync("git", ["clone", "--depth", "1", PLUGIN_GIT_URL, dest], { stdio: "pipe" });
+  const r = await spawnAsync("git", ["clone", "--depth", "1", PLUGIN_GIT_URL, dest]);
   if (r.status !== 0) return null;
   const candidate = join(dest, "bin", "bacon-setup");
   return existsSync(candidate) ? candidate : null;
@@ -106,8 +138,8 @@ function cloneBaconSetup() {
 
 // Guaranteed resolver used by the setup steps: prefer Claude's own copy, else
 // self-clone. Only returns null if both disk lookup AND git clone fail.
-function ensureBaconSetup() {
-  return findBaconSetup() || cloneBaconSetup();
+async function ensureBaconSetup() {
+  return findBaconSetup() || (await cloneBaconSetup());
 }
 
 // ─── steps ──────────────────────────────────────────────────────────────────
@@ -133,7 +165,7 @@ function checkNode(steps) {
 // regardless) — just nudge the user to update.
 const MIN_CLAUDE_MAJOR = 2;
 
-function checkClaude(steps) {
+async function checkClaude(steps) {
   const r = run("claude", ["--version"]);
   if (!r.ok) {
     steps.failStep(1, "Claude Code CLI not found.");
@@ -147,7 +179,7 @@ function checkClaude(steps) {
   if (major !== null && major < MIN_CLAUDE_MAJOR) {
     steps.addNote(1, `Claude Code ${m[0]} is outdated — update for the smoothest setup.`);
     steps.addNote(1, "running: claude update");
-    const upd = spawnSync("claude", ["update"], { stdio: "pipe" });
+    const upd = await spawnAsync("claude", ["update"]);
     const after = run("claude", ["--version"]);
     const newVer = after.ok ? (after.out.match(/\d+\.\d+\.\d+/) || [])[0] : null;
     if (upd.status === 0 && newVer && newVer !== m[0]) {
@@ -161,18 +193,16 @@ function checkClaude(steps) {
   return true;
 }
 
-function installPlugin(steps) {
+async function installPlugin(steps) {
   // Add the Bacon marketplace then install the plugin through it
   steps.addNote(2, "running: claude plugin marketplace add GetUrBacon/bacon");
-  spawnSync(
-    "claude", ["plugin", "marketplace", "add", "GetUrBacon/bacon"],
-    { stdio: "pipe" }
+  await spawnAsync(
+    "claude", ["plugin", "marketplace", "add", "GetUrBacon/bacon"]
   );
 
   steps.addNote(2, "running: claude plugin install bacon@GetUrBacon");
-  const install = spawnSync(
-    "claude", ["plugin", "install", "bacon@GetUrBacon"],
-    { stdio: "pipe" }
+  const install = await spawnAsync(
+    "claude", ["plugin", "install", "bacon@GetUrBacon"]
   );
 
   if (install.status === 0) {
@@ -463,8 +493,9 @@ async function main() {
 
   // Step 1 — prerequisites
   steps.startStep(1);
+  await tick();
   if (!checkNode(steps)) { exitWith(1); return; }
-  if (!checkClaude(steps)) { exitWith(1); return; }
+  if (!(await checkClaude(steps))) { exitWith(1); return; }
 
   // Step 2 — plugin install (skip entirely if already installed)
   const alreadyInstalled = !!findBaconSetup();
@@ -472,12 +503,14 @@ async function main() {
     steps.okStep(2, "Plugin already installed — skipping reinstall");
   } else {
     steps.startStep(2);
-    if (!installPlugin(steps)) { exitWith(1); return; }
+    await tick();
+    if (!(await installPlugin(steps))) { exitWith(1); return; }
   }
 
   // Step 3 — config init
   steps.startStep(3);
-  const baconSetup = ensureBaconSetup();
+  await tick();
+  const baconSetup = await ensureBaconSetup();
   if (!baconSetup) {
     steps.failStep(3, "Could not locate or fetch bacon-setup.");
     steps.addNote(3, "Open Claude Code and run /bacon:setup to finish.");
