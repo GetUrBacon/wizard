@@ -308,7 +308,30 @@ const STEP_LABELS = [
 
 const PACKAGE_VERSION = require("../package.json").version;
 
+// Ink imports `is-in-ci`, which treats any of CI / CONTINUOUS_INTEGRATION /
+// a CI_*-prefixed env var as "running in CI" — and when true, Ink's onRender
+// never writes the live tree to stdout at all (it silently tracks the last
+// frame in memory and only dumps it once, whenever the process happens to
+// unmount). Some terminal-hosting apps (observed: Orca's embedded terminal)
+// set a CI-look-alike env var for their own reasons, which silently breaks
+// the whole wizard UI — no header bar, no split-pane, total silence through
+// every step, then one glued-together frame dump right at exit. bacon-wizard
+// is never actually meant to run in real CI (it requires a human to complete
+// browser login and arrow-key preference selection), so it's safe and
+// correct to neutralize these before Ink's `is-in-ci` check evaluates them
+// (that check runs at module-load time, so this must happen before the
+// dynamic `import("ink")` below).
+function neutralizeFalseCiDetection() {
+  delete process.env.CI;
+  delete process.env.CONTINUOUS_INTEGRATION;
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith("CI_")) delete process.env[key];
+  }
+}
+
 async function main() {
+  neutralizeFalseCiDetection();
+
   // Ink/React/the UI components are ESM-only; load them via dynamic import
   // from this CJS bin, same pattern already used for @clack/prompts below.
   const [
