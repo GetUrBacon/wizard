@@ -6,6 +6,10 @@
   "bin": {
     "bacon-wizard": "bin/wizard.cjs"
   },
+  "files": [
+    "bin",
+    "src"
+  ],
   "scripts": {
     "start": "node bin/wizard.cjs"
   },
