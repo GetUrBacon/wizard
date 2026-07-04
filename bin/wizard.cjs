@@ -21,9 +21,44 @@ const chalk = require("chalk");
 const dim    = chalk.hex("#74849e");
 const bright = chalk.hex("#e9f1fc");
 const mono   = chalk.hex("#8a9bb5");
+const green  = chalk.hex("#36e85a");
+const warn   = chalk.hex("#f5a623");
+const fail   = chalk.hex("#e85a5a");
 
 function print(...lines) {
   for (const l of lines) process.stdout.write(l + "\n");
+}
+
+// Plain-text mirror of src/ui/OutroScreen.jsx, printed to the REAL screen
+// after leaveAltScreen() — everything Ink ever rendered (this outro
+// included) lives only in the alternate-screen buffer and is discarded the
+// moment that buffer closes, so the final dashboard-link/config-commands
+// summary has to be re-emitted here or it would just vanish along with the
+// rest of the run instead of staying on screen for the user to read/copy.
+function printOutroSummary(loggedIn) {
+  print(
+    "",
+    dim("  " + "─".repeat(48)),
+    "",
+    green("  ✓ Bacon is set up!"),
+    ""
+  );
+  if (loggedIn) {
+    print(`  ${bright("Dashboard →")}  ${mono("https://geturbacon.dev/dashboard")}`);
+  } else {
+    print(`  ${warn("→ Connect later:")}  ${mono("bacon-setup login")}`);
+  }
+  print(
+    "",
+    dim("  Ads appear occasionally in Claude Code."),
+    dim("  Your prompts never leave your machine."),
+    "",
+    `  ${dim("configure")}  ${mono("bacon-config show")}`,
+    `  ${dim("pause")}     ${mono("bacon-config pause")}`,
+    "",
+    dim("  " + "─".repeat(48)),
+    ""
+  );
 }
 
 function prompt(question) {
@@ -375,7 +410,37 @@ function neutralizeFalseCiDetection() {
   }
 }
 
+// ─── alt-screen terminal handling ───────────────────────────────────────────
+//
+// Ink normally renders inline, appending this wizard's entire multi-step run
+// to the user's real terminal scrollback permanently. Switching to the
+// alternate screen buffer (the same mechanism vim/htop/less use) gives Ink a
+// private, full-screen viewport instead: nothing the wizard ever prints —
+// including any transient rendering hiccup mid-run — is left behind in the
+// user's terminal history once the wizard exits and the original screen
+// content is restored underneath it.
+//
+// `process.on("exit", ...)` (not a call at each individual exit point) is
+// what guarantees this always runs — it fires synchronously on every exit
+// path (normal completion, exitWith()'s process.exit(), the uncaught-error
+// process.exit(1) in the main().catch() below, Ctrl+C). Leaving a process
+// exited mid-alt-screen would strand the user's terminal showing nothing
+// until they ran `reset` or opened a new tab, so this cannot be left to
+// per-callsite discipline.
+const ENTER_ALT_SCREEN = "\x1b[?1049h\x1b[2J\x1b[H";
+const LEAVE_ALT_SCREEN = "\x1b[0m\x1b[?1049l";
+
+let leftAltScreen = false;
+function leaveAltScreen() {
+  if (leftAltScreen) return;
+  leftAltScreen = true;
+  process.stdout.write(LEAVE_ALT_SCREEN);
+}
+
 async function main() {
+  process.stdout.write(ENTER_ALT_SCREEN);
+  process.on("exit", leaveAltScreen);
+
   neutralizeFalseCiDetection();
 
   // Ink/React/the UI components are ESM-only; load them via dynamic import
@@ -468,13 +533,24 @@ async function main() {
   const MIN_STEP_RUNNING_MS = 400;
   const stepStartedAt = new Map();
 
+  // exitWith() leaves the alt screen on any failure exit, which discards
+  // the failed step's red ✗ message along with everything else Ink ever
+  // rendered — so the reason for the failure has to be captured here and
+  // re-printed to the real screen afterward, or the user is left staring
+  // at a terminal that reverted to whatever was on it before the wizard
+  // ran, with no indication of what went wrong.
+  let lastFailureMessage = null;
+
   const steps = {
     startStep: (...a) => {
       stepStartedAt.set(a[0], Date.now());
       return controllerRef.current.startStep(...a);
     },
     okStep:    (...a) => controllerRef.current.okStep(...a),
-    failStep:  (...a) => controllerRef.current.failStep(...a),
+    failStep:  (...a) => {
+      lastFailureMessage = a[1];
+      return controllerRef.current.failStep(...a);
+    },
     addNote:   (...a) => controllerRef.current.addNote(...a),
     async holdMin(n) {
       const startedAt = stepStartedAt.get(n);
@@ -530,6 +606,10 @@ async function main() {
 
   function exitWith(code) {
     try { inkInstance.unmount(); } catch { /* already unmounted */ }
+    leaveAltScreen();
+    if (code !== 0 && lastFailureMessage) {
+      print("", fail("  ✗ " + lastFailureMessage), "");
+    }
     process.exit(code);
   }
 
@@ -580,6 +660,15 @@ async function main() {
   // racing the state update's commit.
   await new Promise((resolve) => setTimeout(resolve, 50));
   inkInstance.unmount();
+  leaveAltScreen();
+  printOutroSummary(loggedIn);
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch((e) => {
+  // leaveAltScreen() first — otherwise this error (and its stack trace)
+  // gets written into the alt-screen buffer and is discarded the instant
+  // the process exits, leaving the user with no clue what happened.
+  leaveAltScreen();
+  console.error(e);
+  process.exit(1);
+});
