@@ -306,21 +306,25 @@ const STEP_LABELS = [
   "Choosing your ad preferences",
 ];
 
+const PACKAGE_VERSION = require("../package.json").version;
+
 async function main() {
   // Ink/React/the UI components are ESM-only; load them via dynamic import
   // from this CJS bin, same pattern already used for @clack/prompts below.
   const [
     { default: React },
-    { render, Static },
+    { render },
     { default: Banner },
-    { default: StepList },
+    { default: HeaderBar },
+    { default: RunScreen },
     { default: OutroScreen },
     { useWizardSteps, withSuspendedRender },
   ] = await Promise.all([
     import("react"),
     import("ink"),
     import("../src/ui/Banner.js"),
-    import("../src/ui/StepList.js"),
+    import("../src/ui/HeaderBar.js"),
+    import("../src/ui/RunScreen.js"),
     import("../src/ui/OutroScreen.js"),
     import("../src/ui/useWizardSteps.js"),
   ]);
@@ -341,34 +345,42 @@ async function main() {
 
   function App() {
     const wiz = useWizardSteps(STEP_LABELS);
-    const [stage, setStage] = React.useState("run");
+    const [stage, setStage] = React.useState("intro");
     const [suspended, setSuspended] = React.useState(false);
     const [loggedIn, setLoggedIn] = React.useState(false);
     controllerRef.current = { ...wiz, setStage, setSuspended, setLoggedIn };
 
+    // Exactly one stage's content renders below the header at a time —
+    // switching stages fully replaces the previous stage's content instead
+    // of leaving it visible (no <Static>/permanent commit here: Ink's normal
+    // re-render already erases-and-redraws the previous frame, which is
+    // what makes a clean screen-to-screen swap the default behavior once
+    // nothing is opted out of it via <Static>).
+    const stageContent =
+      stage === "outro"
+        ? React.createElement(OutroScreen, { loggedIn })
+        : stage === "run"
+        ? React.createElement(RunScreen, { steps: wiz.steps, total: STEP_LABELS.length, suspended })
+        : React.createElement(Banner);
+
     return React.createElement(
       React.Fragment,
       null,
-      // Banner is committed once via <Static> and never revisited — Ink
-      // guarantees Static items are painted exactly once and left alone,
-      // which is what makes banner duplication structurally impossible
-      // here rather than just "unlikely."
-      React.createElement(
-        Static,
-        { items: ["banner"] },
-        (item) => React.createElement(Banner, { key: item })
-      ),
-      // The step list stays on screen at outro (matching the old behavior
-      // where showDone() printed below the persisted step list) — it's no
-      // longer receiving updates by the time stage flips to "outro", so
-      // leaving it mounted just shows the final completed checklist above
-      // the summary card rather than replacing it.
-      React.createElement(StepList, { steps: wiz.steps, total: STEP_LABELS.length, suspended }),
-      stage === "outro" ? React.createElement(OutroScreen, { loggedIn }) : null
+      React.createElement(HeaderBar, {
+        left: `🥓 Bacon Wizard v${PACKAGE_VERSION}`,
+        right: "geturbacon.dev",
+      }),
+      stageContent
     );
   }
 
   const inkInstance = render(React.createElement(App));
+
+  // Briefly show the intro art before moving into the run stage — no
+  // confirm gate is added here (this stays a true one-command flow), the
+  // art just gets a moment on screen instead of flashing by instantly.
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  controllerRef.current.setStage("run");
 
   const steps = {
     startStep: (...a) => controllerRef.current.startStep(...a),
@@ -382,9 +394,41 @@ async function main() {
   // unmount), then un-freezes.
   async function suspend(fn) {
     controllerRef.current.setSuspended(true);
+    // setSuspended(true) (plus whatever step-status update just preceded
+    // this call, e.g. startStep()) is an async React state update — it
+    // queues a re-render that isn't guaranteed to have committed and
+    // flushed to stdout by the time this function continues. Verified via
+    // a real PTY capture (rendered through pyte) that without waiting here,
+    // that pending repaint can flush AFTER fn() has already started writing
+    // raw output (readline's prompt text), gluing the header bar onto it
+    // with no separating newline. This 100ms wait reliably avoids that in
+    // realistic usage — also verified via a PTY capture with a *simulated
+    // real keypress* (~1.2s reaction time before answering the prompt),
+    // which renders cleanly. The theoretical race only reopens if fn()'s
+    // own first await never resolves at all (e.g. stdin is closed/non-TTY,
+    // so readline's prompt hangs forever) — a real interactive user always
+    // takes far longer than 100ms to react, so this is accepted as a
+    // non-interactive-environment edge case, not a real-usage bug.
+    await new Promise((resolve) => setTimeout(resolve, 100));
     try {
       return await withSuspendedRender(inkInstance, fn);
     } finally {
+      // fn()'s raw output (readline/clack/a subprocess) doesn't guarantee it
+      // ends with a trailing newline — e.g. readline's rl.question() leaves
+      // the cursor right after the prompt text until the user's Enter is
+      // echoed, which doesn't always happen (non-interactive stdin, some
+      // terminal modes). A bare "\n" is NOT enough here: it's a line feed
+      // only — it moves the cursor down a row but does not reset the
+      // column, unless the terminal's ONLCR driver setting happens to
+      // translate it to CRLF (verified via a real PTY capture, rendered
+      // through pyte, that this is not guaranteed — readline can leave the
+      // cursor at an arbitrary column, e.g. matching the prompt text's
+      // length, and Ink's next frame then starts painting from THAT column
+      // instead of column 0, gluing its first line onto the tail of
+      // whatever fn() last printed). Write "\r\n" explicitly so both the
+      // column reset and the line advance happen regardless of terminal
+      // driver settings.
+      process.stdout.write("\r\n");
       controllerRef.current.setSuspended(false);
     }
   }
