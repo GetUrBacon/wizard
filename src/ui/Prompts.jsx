@@ -56,6 +56,11 @@ export function AskMultiSelect({ message, options, initialValues, onSubmit, onCa
     <Box flexDirection="column">
       <Text color={BRIGHT} bold>{message}</Text>
       <Box marginTop={1}>
+        {/* Unlike Select above, MultiSelect's `defaultValue` (pre-checked options
+            by value) is NOT subject to the same bug: a multi-select's set of
+            checked values is independent of which option currently has cursor
+            focus, whereas Select's single `value` is tied to whatever option is
+            focused when Enter is pressed. */}
         <MultiSelect options={options} defaultValue={initialValues} onSubmit={onSubmit} />
       </Box>
       <Box marginTop={1}>

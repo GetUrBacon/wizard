@@ -23,12 +23,14 @@ const { hasClerkToken } = require("./config-utils.cjs");
 // fully respects NO_COLOR/FORCE_COLOR on its own by computing its color
 // level from process.env at import time. No manual `NO_COLOR in
 // process.env` branch is needed or wanted here — see tests/no-color.test.js.
-const dim    = chalk.hex("#74849e");
-const bright = chalk.hex("#e9f1fc");
-const mono   = chalk.hex("#8a9bb5");
-const green  = chalk.hex("#36e85a");
-const warn   = chalk.hex("#f5a623");
-const fail   = chalk.hex("#e85a5a");
+//
+// These are assigned once, inside main(), from src/ui/theme.js's exported
+// hex constants — theme.js is ESM-only, so it's loaded via the same
+// dynamic-import Promise.all() as ink/react/etc. Declaring them here (rather
+// than inside main()) lets printOutroSummary() and configurePreferences()
+// — both module-scope functions defined outside main() — keep closing over
+// them unchanged; main() always assigns these before either function runs.
+let dim, bright, mono, green, warn, fail;
 
 function print(...lines) {
   for (const l of lines) process.stdout.write(l + "\n");
@@ -84,11 +86,11 @@ function run(bin, args = []) {
 // the thread is blocked in a sync syscall). spawn() lets Node's event loop
 // keep running while the subprocess is alive, so the spinner animates for
 // real instead of the screen freezing and then jumping straight to done.
-function spawnAsync(bin, args = [], opts = {}) {
+function spawnAsync(bin, args = []) {
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn(bin, args, { stdio: "pipe", ...opts });
+      child = spawn(bin, args, { stdio: "pipe" });
     } catch {
       resolve({ status: 1 });
       return;
@@ -305,6 +307,16 @@ async function runLogin(steps, baconSetup, askConfirm) {
 
 const CANCELLED = Symbol("cancelled");
 
+// Shared shape behind configurePreferences' three "run a python3 config
+// subcommand, print a dim fallback note if it fails" call sites (setConfig,
+// statusline-enable, spinner-enable) — only the argv and failure message
+// differ between them.
+async function runConfigCommand(args, failMessage) {
+  const r = await spawnAsync("python3", args);
+  if (r.status !== 0) print(`  ${dim("·")} ${dim(failMessage)}`);
+  return r;
+}
+
 async function configurePreferences(baconSetup, { askSelect, askMultiSelect }, exitWith) {
   // Ink-native arrow-key preferences (src/ui/Prompts.jsx), swapped into
   // RunScreen's right pane in place of StepList — no suspend, no raw stdio
@@ -319,10 +331,8 @@ async function configurePreferences(baconSetup, { askSelect, askMultiSelect }, e
     if (v === CANCELLED) exitWith(0); // routes through Ink's unmount() instead of a bare process.exit
     return v;
   };
-  const setConfig = async (cmd, value) => {
-    const r = await spawnAsync("python3", [baconConfigPath, cmd, value]);
-    if (r.status !== 0) print(`  ${dim("·")} ${dim(`Could not set ${cmd} to ${value}`)}`);
-  };
+  const setConfig = (cmd, value) =>
+    runConfigCommand([baconConfigPath, cmd, value], `Could not set ${cmd} to ${value}`);
 
   // Recommended option listed first in each — @inkjs/ui's Select always
   // visually focuses options[0] on mount (see the comment on AskSelect in
@@ -362,12 +372,10 @@ async function configurePreferences(baconSetup, { askSelect, askMultiSelect }, e
 
   await setConfig("inreply", surfaces.includes("inreply") ? "on" : "off");
   if (surfaces.includes("statusline")) {
-    const r = await spawnAsync("python3", [baconSetup, "statusline-enable", "--style", "marquee"]);
-    if (r.status !== 0) print(`  ${dim("·")} ${dim("Could not enable statusline")}`);
+    await runConfigCommand([baconSetup, "statusline-enable", "--style", "marquee"], "Could not enable statusline");
   }
   if (surfaces.includes("spinner")) {
-    const r = await spawnAsync("python3", [baconSetup, "spinner-enable"]);
-    if (r.status !== 0) print(`  ${dim("·")} ${dim("Could not enable thinking verb")}`);
+    await runConfigCommand([baconSetup, "spinner-enable"], "Could not enable thinking verb");
   }
 }
 
@@ -440,67 +448,46 @@ function leaveAltScreen() {
   process.stdout.write(LEAVE_ALT_SCREEN);
 }
 
-async function main() {
-  // Both stdin AND stdout must be a real TTY: this wizard requires genuine
-  // interactivity (browser login, an arrow-key preference menu), and a
-  // non-TTY stdout would garble full-screen/alt-screen rendering even with
-  // an interactive stdin. Check this before anything else — before writing
-  // ENTER_ALT_SCREEN, before registering the exit handler, before any
-  // dynamic import — so a piped/non-interactive invocation fails fast with
-  // a clear message instead of constructing an Ink render tree and then
-  // hanging forever on the login/menu steps waiting for input that will
-  // never come.
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    console.error(
-      "bacon-wizard requires an interactive terminal (TTY) to run.\n" +
-      "It looks like input or output is piped/non-interactive.\n" +
-      "Run it directly in a terminal, or complete setup via Claude Code with /bacon:setup."
-    );
-    process.exit(1);
-    return;
-  }
+// Bridge from imperative main()-flow code to the Ink-native prompts: sets
+// `picker` (rendered in RunScreen's right pane, see createApp() below) and
+// resolves when the prompt component calls back, then clears `picker`
+// before returning the value to the caller. askConfirm/askSelect/
+// askMultiSelect (declared inside main(), where controllerRef lives) are
+// all just this same set/resolve/clear shape with a different `type` and
+// prompt-specific props layered in.
+function ask(controllerRef, type, props) {
+  return new Promise((resolve) => {
+    controllerRef.current.setPicker({
+      type,
+      ...props,
+      resolve: (v) => { controllerRef.current.setPicker(null); resolve(v); },
+    });
+  });
+}
 
-  process.stdout.write(ENTER_ALT_SCREEN);
-  process.on("exit", leaveAltScreen);
-
-  neutralizeFalseCiDetection();
-
-  // Ink/React/the UI components are ESM-only; load them via dynamic import
-  // from this CJS bin.
-  const [
-    { default: React },
-    { render },
-    { default: Banner },
-    { default: HeaderBar },
-    { default: RunScreen },
-    { default: OutroScreen },
-    { useWizardSteps },
-    { AskConfirm, AskSelect, AskMultiSelect },
-    { default: figures },
-  ] = await Promise.all([
-    import("react"),
-    import("ink"),
-    import("../dist/ui/Banner.js"),
-    import("../dist/ui/HeaderBar.js"),
-    import("../dist/ui/RunScreen.js"),
-    import("../dist/ui/OutroScreen.js"),
-    import("../dist/ui/useWizardSteps.js"),
-    import("../dist/ui/Prompts.js"),
-    import("figures"),
-  ]);
-
-  // One persistent Ink instance for the whole process — render() is called
-  // exactly once here, unmount() exactly once at the end (or on a fatal
-  // exit). Ink is never suspended and never hands raw stdio to a
-  // subprocess — login (askConfirm) and preferences (askSelect/
-  // askMultiSelect) are Ink-native prompts rendered in place of StepList's
-  // right pane, resolved via the `picker` state below.
-  //
-  // `controllerRef` points at the current render's { steps, startStep,
-  // okStep, failStep, addNote, setStage, setLoggedIn, setPicker } bundle.
-  const controllerRef = { current: null };
-
-  function App() {
+// Builds the root Ink component. Pulled out of main() (rather than declared
+// inline) purely to keep main() readable — all its dependencies (the
+// dynamically-imported Ink/React pieces, plus main()'s own controllerRef)
+// are threaded through as arguments since this factory lives outside the
+// dynamic-import scope. `controllerRef` points at the current render's
+// { steps, startStep, okStep, failStep, addNote, setStage, setLoggedIn,
+// setPicker } bundle.
+function createApp({
+  React,
+  useWizardSteps,
+  Banner,
+  HeaderBar,
+  RunScreen,
+  OutroScreen,
+  AskConfirm,
+  AskSelect,
+  AskMultiSelect,
+  PACKAGE_VERSION,
+  STEP_LABELS,
+  controllerRef,
+  CANCELLED,
+}) {
+  return function App() {
     const wiz = useWizardSteps(STEP_LABELS);
     const [stage, setStage] = React.useState("intro");
     const [loggedIn, setLoggedIn] = React.useState(false);
@@ -545,14 +532,101 @@ async function main() {
       }),
       stageContent
     );
+  };
+}
+
+async function main() {
+  // Both stdin AND stdout must be a real TTY: this wizard requires genuine
+  // interactivity (browser login, an arrow-key preference menu), and a
+  // non-TTY stdout would garble full-screen/alt-screen rendering even with
+  // an interactive stdin. Check this before anything else — before writing
+  // ENTER_ALT_SCREEN, before registering the exit handler, before any
+  // dynamic import — so a piped/non-interactive invocation fails fast with
+  // a clear message instead of constructing an Ink render tree and then
+  // hanging forever on the login/menu steps waiting for input that will
+  // never come.
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    console.error(
+      "bacon-wizard requires an interactive terminal (TTY) to run.\n" +
+      "It looks like input or output is piped/non-interactive.\n" +
+      "Run it directly in a terminal, or complete setup via Claude Code with /bacon:setup."
+    );
+    process.exit(1);
+    return;
   }
+
+  process.stdout.write(ENTER_ALT_SCREEN);
+  process.on("exit", leaveAltScreen);
+
+  neutralizeFalseCiDetection();
+
+  // Ink/React/the UI components are ESM-only; load them via dynamic import
+  // from this CJS bin.
+  const [
+    { default: React },
+    { render },
+    { default: Banner },
+    { default: HeaderBar },
+    { default: RunScreen },
+    { default: OutroScreen },
+    { useWizardSteps },
+    { AskConfirm, AskSelect, AskMultiSelect },
+    { default: figures },
+    { GREEN, DIM, BRIGHT, CREAM, DARK, WARN, MONO, FAIL },
+  ] = await Promise.all([
+    import("react"),
+    import("ink"),
+    import("../dist/ui/Banner.js"),
+    import("../dist/ui/HeaderBar.js"),
+    import("../dist/ui/RunScreen.js"),
+    import("../dist/ui/OutroScreen.js"),
+    import("../dist/ui/useWizardSteps.js"),
+    import("../dist/ui/Prompts.js"),
+    import("figures"),
+    import("../dist/ui/theme.js"),
+  ]);
+  void CREAM; void DARK; // not used for chalk output here — destructured for parity with theme.js's full export set
+  dim = chalk.hex(DIM);
+  bright = chalk.hex(BRIGHT);
+  mono = chalk.hex(MONO);
+  green = chalk.hex(GREEN);
+  warn = chalk.hex(WARN);
+  fail = chalk.hex(FAIL);
+
+  // One persistent Ink instance for the whole process — render() is called
+  // exactly once here, unmount() exactly once at the end (or on a fatal
+  // exit). Ink is never suspended and never hands raw stdio to a
+  // subprocess — login (askConfirm) and preferences (askSelect/
+  // askMultiSelect) are Ink-native prompts rendered in place of StepList's
+  // right pane, resolved via the `picker` state below.
+  //
+  // `controllerRef` points at the current render's { steps, startStep,
+  // okStep, failStep, addNote, setStage, setLoggedIn, setPicker } bundle.
+  const controllerRef = { current: null };
+
+  const App = createApp({
+    React,
+    useWizardSteps,
+    Banner,
+    HeaderBar,
+    RunScreen,
+    OutroScreen,
+    AskConfirm,
+    AskSelect,
+    AskMultiSelect,
+    PACKAGE_VERSION,
+    STEP_LABELS,
+    controllerRef,
+    CANCELLED,
+  });
 
   const inkInstance = render(React.createElement(App));
 
   // Briefly show the intro art before moving into the run stage — no
   // confirm gate is added here (this stays a true one-command flow), the
   // art just gets a moment on screen instead of flashing by instantly.
-  await new Promise((resolve) => setTimeout(resolve, 700));
+  const INTRO_DISPLAY_MS = 700;
+  await new Promise((resolve) => setTimeout(resolve, INTRO_DISPLAY_MS));
   controllerRef.current.setStage("run");
 
   // Steps 1–3 do their real work (version checks, plugin lookup, config
@@ -599,40 +673,12 @@ async function main() {
     },
   };
 
-  // Bridge from imperative main()-flow code to the Ink-native prompts: each
-  // sets `picker` (rendered in RunScreen's right pane, see App() above) and
-  // resolves when the prompt component calls back, then clears `picker`
-  // before returning the value to the caller.
-  function askConfirm(message) {
-    return new Promise((resolve) => {
-      controllerRef.current.setPicker({
-        type: "confirm",
-        message,
-        resolve: (v) => { controllerRef.current.setPicker(null); resolve(v); },
-      });
-    });
-  }
-  function askSelect(message, options) {
-    return new Promise((resolve) => {
-      controllerRef.current.setPicker({
-        type: "select",
-        message,
-        options,
-        resolve: (v) => { controllerRef.current.setPicker(null); resolve(v); },
-      });
-    });
-  }
-  function askMultiSelect(message, options, initialValues) {
-    return new Promise((resolve) => {
-      controllerRef.current.setPicker({
-        type: "multiselect",
-        message,
-        options,
-        initialValues,
-        resolve: (v) => { controllerRef.current.setPicker(null); resolve(v); },
-      });
-    });
-  }
+  // Thin, call-site-compatible wrappers around the shared ask() helper —
+  // see its definition above for the set/resolve/clear mechanics.
+  const askConfirm = (message) => ask(controllerRef, "confirm", { message });
+  const askSelect = (message, options) => ask(controllerRef, "select", { message, options });
+  const askMultiSelect = (message, options, initialValues) =>
+    ask(controllerRef, "multiselect", { message, options, initialValues });
 
   function exitWith(code) {
     try { inkInstance.unmount(); } catch { /* already unmounted */ }
@@ -687,7 +733,8 @@ async function main() {
   // Give React/Ink one tick to commit the outro frame before we tear the
   // tree down — unmounting synchronously right after setStage() risks
   // racing the state update's commit.
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  const OUTRO_SETTLE_MS = 50;
+  await new Promise((resolve) => setTimeout(resolve, OUTRO_SETTLE_MS));
   inkInstance.unmount();
   leaveAltScreen();
   printOutroSummary(loggedIn, figures);

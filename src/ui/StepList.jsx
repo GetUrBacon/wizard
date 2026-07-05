@@ -114,10 +114,10 @@ const HEADING = { __heading: true };
 // This relies on `finished` only ever growing — steps move
 // pending -> running -> ok-or-fail and never revert, which is already true
 // of this codebase's step state machine.
-export default function StepList({ steps, total, showHeading = true }) {
+export default function StepList({ steps, total }) {
   const finished = steps.filter((s) => s.status === 'ok' || s.status === 'fail');
   const live = steps.filter((s) => s.status === 'pending' || s.status === 'running');
-  const staticItems = showHeading ? [HEADING, ...finished] : finished;
+  const staticItems = [HEADING, ...finished];
 
   return (
     <Box flexDirection="column">

@@ -32,10 +32,6 @@ export function createInitialSteps(labels) {
   }));
 }
 
-// Factory alias — callers may use either `createInitialSteps(labels)` or
-// `initialSteps(labels)` to seed a StepState[] array.
-export const initialSteps = createInitialSteps;
-
 /**
  * React hook managing the wizard's step list state.
  * @param {string[]} labels
