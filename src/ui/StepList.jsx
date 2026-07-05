@@ -4,17 +4,27 @@ import { Spinner as InkSpinner } from '@inkjs/ui';
 import figures from 'figures';
 import { GREEN, DIM, BRIGHT, FAIL } from './theme.js';
 
-// Each row is an icon/prefix (fixed width, flexShrink: 0) next to a
-// message that can wrap on its own (flexGrow: 1). The narrower half-width
-// column introduced by the Learn/Tasks split makes wrapping much more
-// likely than before — without flexShrink: 0 on the icon, Ink/Yoga's wrap
-// calculation can eat the icon's trailing space at the wrap boundary,
-// gluing it directly onto the message (e.g. "✓Plugin already installed").
-function PendingRow({ step }) {
+// One line per step: "[n/total]" prefix + status icon/spinner + label or
+// message, all on a single row (fixed-width flexShrink: 0 prefix next to a
+// flexGrow: 1 text that can wrap on its own). This used to be two lines per
+// step (a "[n/total] label" header row, then a separate status row below),
+// which — combined with every step rendering live simultaneously once
+// <Static> was removed (see the default export's doc comment) — pushed
+// StepList's total height to ~19-20 lines. That's enough to reach or
+// exceed a real terminal's row count, which trips Ink's own fallback in
+// onRender() (ink/build/ink.js): `if (outputHeight >= stdout.rows)` does a
+// full-screen clear + full redraw on EVERY render instead of its normal
+// targeted line-erase. Confirmed via a real PTY capture (raw bytes fed
+// through pyte, a proper terminal emulator) that this fired ~16 times in
+// under 2 seconds while a spinner was animating — clearing the whole
+// screen at ~12Hz causes visible tearing on a real terminal that reads as
+// stacked duplicate frames. Halving the height (one line per step instead
+// of two) keeps the total render comfortably under any real terminal size.
+function PendingRow({ step, total }) {
   return (
     <Box>
       <Box flexShrink={0}>
-        <Text color={DIM}>  · </Text>
+        <Text color={DIM}>{`[${step.n}/${total}] · `}</Text>
       </Box>
       <Box flexGrow={1}>
         <Text color={DIM}>{step.label}</Text>
@@ -23,11 +33,11 @@ function PendingRow({ step }) {
   );
 }
 
-function RunningRow({ step }) {
+function RunningRow({ step, total }) {
   return (
     <Box>
       <Box flexShrink={0}>
-        <Text>  </Text>
+        <Text color={DIM}>{`[${step.n}/${total}] `}</Text>
         <InkSpinner />
         <Text> </Text>
       </Box>
@@ -38,11 +48,12 @@ function RunningRow({ step }) {
   );
 }
 
-function OkRow({ step }) {
+function OkRow({ step, total }) {
   return (
     <Box>
       <Box flexShrink={0}>
-        <Text color={GREEN}>  {figures.tick} </Text>
+        <Text color={DIM}>{`[${step.n}/${total}] `}</Text>
+        <Text color={GREEN}>{figures.tick} </Text>
       </Box>
       <Box flexGrow={1}>
         <Text>{step.message}</Text>
@@ -51,11 +62,12 @@ function OkRow({ step }) {
   );
 }
 
-function FailRow({ step }) {
+function FailRow({ step, total }) {
   return (
     <Box>
       <Box flexShrink={0}>
-        <Text color={FAIL}>  {figures.cross} </Text>
+        <Text color={DIM}>{`[${step.n}/${total}] `}</Text>
+        <Text color={FAIL}>{figures.cross} </Text>
       </Box>
       <Box flexGrow={1}>
         <Text>{step.message}</Text>
@@ -76,15 +88,7 @@ function StepRow({ step, total }) {
 
   return (
     <React.Fragment>
-      <Box>
-        <Box flexShrink={0}>
-          <Text color={DIM}>{`[${step.n}/${total}] `}</Text>
-        </Box>
-        <Box flexGrow={1}>
-          <Text color={BRIGHT}>{step.label}</Text>
-        </Box>
-      </Box>
-      {StatusRow ? <StatusRow step={step} /> : null}
+      {StatusRow ? <StatusRow step={step} total={total} /> : null}
       {step.notes.map((note, index) => (
         <Box key={`note-${step.n}-${index}`}>
           <Box flexShrink={0}>
