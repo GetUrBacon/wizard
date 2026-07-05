@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import React from 'react';
 import { render } from 'ink-testing-library';
+import figures from 'figures';
 import StepList from '../dist/ui/StepList.js';
 
 function makeStep(overrides) {
@@ -23,32 +24,39 @@ test('pending step renders the dim middle-dot marker and its label, no check/X',
 
   assert.ok(frame.includes('· '));
   assert.ok(frame.includes('Install plugin'));
-  assert.ok(!frame.includes('✓'));
-  assert.ok(!frame.includes('✗'));
+  assert.ok(!frame.includes(figures.tick));
+  assert.ok(!frame.includes(figures.cross));
 });
 
+// @inkjs/ui's Spinner mounts a real setInterval, so every running-step test
+// below must unmount() or the interval keeps the test file's process alive
+// indefinitely. lastFrame() is synchronous, called before the interval's
+// first 80ms tick, so the first rendered frame is deterministic:
+// cli-spinners' 'dots' frame[0].
 test('running step renders the deterministic first spinner frame and activeLabel/label', () => {
   const steps = [
     makeStep({ status: 'running', label: 'Install plugin', activeLabel: 'Installing plugin…' }),
   ];
-  const { lastFrame } = render(
-    React.createElement(StepList, { steps, total: 1, suspended: true })
-  );
-  const frame = lastFrame();
-
-  assert.ok(frame.includes('⠋'));
-  assert.ok(frame.includes('Installing plugin…'));
+  const { lastFrame, unmount } = render(React.createElement(StepList, { steps, total: 1 }));
+  try {
+    const frame = lastFrame();
+    assert.ok(frame.includes('⠋'));
+    assert.ok(frame.includes('Installing plugin…'));
+  } finally {
+    unmount();
+  }
 });
 
 test('running step falls back to label when activeLabel is unset', () => {
   const steps = [makeStep({ status: 'running', label: 'Install plugin' })];
-  const { lastFrame } = render(
-    React.createElement(StepList, { steps, total: 1, suspended: true })
-  );
-  const frame = lastFrame();
-
-  assert.ok(frame.includes('⠋'));
-  assert.ok(frame.includes('Install plugin'));
+  const { lastFrame, unmount } = render(React.createElement(StepList, { steps, total: 1 }));
+  try {
+    const frame = lastFrame();
+    assert.ok(frame.includes('⠋'));
+    assert.ok(frame.includes('Install plugin'));
+  } finally {
+    unmount();
+  }
 });
 
 test('ok step renders a checkmark and the step message', () => {
@@ -56,7 +64,7 @@ test('ok step renders a checkmark and the step message', () => {
   const { lastFrame } = render(React.createElement(StepList, { steps, total: 1 }));
   const frame = lastFrame();
 
-  assert.ok(frame.includes('✓'));
+  assert.ok(frame.includes(figures.tick));
   assert.ok(frame.includes('Plugin already installed'));
 });
 
@@ -65,7 +73,7 @@ test('fail step renders an X mark and the step message', () => {
   const { lastFrame } = render(React.createElement(StepList, { steps, total: 1 }));
   const frame = lastFrame();
 
-  assert.ok(frame.includes('✗'));
+  assert.ok(frame.includes(figures.cross));
   assert.ok(frame.includes('Plugin install failed'));
 });
 

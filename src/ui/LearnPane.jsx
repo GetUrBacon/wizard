@@ -39,16 +39,15 @@ const BLURBS = [
 
 const ROTATE_MS = 4000;
 
-export default function LearnPane({ suspended = false }) {
+export default function LearnPane() {
   const [index, setIndex] = React.useState(0);
 
   React.useEffect(() => {
-    if (suspended) return undefined;
     const interval = setInterval(() => {
       setIndex((prev) => (prev + 1) % BLURBS.length);
     }, ROTATE_MS);
     return () => clearInterval(interval);
-  }, [suspended]);
+  }, []);
 
   const blurb = BLURBS[index];
 

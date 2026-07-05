@@ -5,19 +5,24 @@ const { execFileSync, spawn, spawnSync } = require("node:child_process");
 const { existsSync, readdirSync, statSync, mkdirSync, rmSync } = require("node:fs");
 const { homedir, tmpdir } = require("node:os");
 const { dirname, join } = require("node:path");
-const readline = require("node:readline");
 const chalk = require("chalk");
+const { hasClerkToken } = require("./config-utils.cjs");
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 //
-// These chalk-based helpers are only used for plain terminal output that
-// happens while Ink's spinner is frozen and the terminal is on loan to a raw
-// subprocess/prompt (see `suspend()` in main()) — e.g. the "press ENTER"
-// prompt before the Clerk login subprocess. All *step progress* (the
-// persistent step list) is rendered through src/ui/StepList.js +
-// src/ui/useWizardSteps.js instead, and the final done screen is now
-// src/ui/OutroScreen.js, part of the same persistent Ink tree.
+// Ink stays mounted and in control of the terminal for the entire run — it
+// never suspends or hands raw stdio to a subprocess. Login and preferences
+// used to do that (readline + @clack/prompts inside a suspended window);
+// both are now Ink-native (src/ui/Prompts.jsx) and every subprocess runs
+// with piped stdio via spawnAsync. These chalk-based helpers are only used
+// for the outro/failure summary printed to the real screen after
+// leaveAltScreen() — everything Ink itself renders lives in the alternate
+// screen buffer and needs a plain-text mirror once that buffer closes.
 
+// chalk v4 (like Ink's own bundled chalk — see src/ui/theme.js) already
+// fully respects NO_COLOR/FORCE_COLOR on its own by computing its color
+// level from process.env at import time. No manual `NO_COLOR in
+// process.env` branch is needed or wanted here — see tests/no-color.test.js.
 const dim    = chalk.hex("#74849e");
 const bright = chalk.hex("#e9f1fc");
 const mono   = chalk.hex("#8a9bb5");
@@ -35,12 +40,12 @@ function print(...lines) {
 // moment that buffer closes, so the final dashboard-link/config-commands
 // summary has to be re-emitted here or it would just vanish along with the
 // rest of the run instead of staying on screen for the user to read/copy.
-function printOutroSummary(loggedIn) {
+function printOutroSummary(loggedIn, figures) {
   print(
     "",
     dim("  " + "─".repeat(48)),
     "",
-    green("  ✓ Bacon is set up!"),
+    green(`  ${figures.tick} Bacon is set up!`),
     ""
   );
   if (loggedIn) {
@@ -59,16 +64,6 @@ function printOutroSummary(loggedIn) {
     dim("  " + "─".repeat(48)),
     ""
   );
-}
-
-function prompt(question) {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise((resolve) => {
-    rl.question(`  ${mono("?")} ${bright(question)} `, (answer) => {
-      rl.close();
-      resolve(answer.trim().toLowerCase());
-    });
-  });
 }
 
 function run(bin, args = []) {
@@ -115,6 +110,7 @@ const tick = () => new Promise((resolve) => setImmediate(resolve));
 // ─── plugin path resolution ──────────────────────────────────────────────────
 
 const PLUGIN_GIT_URL = "https://github.com/GetUrBacon/bacon.git";
+const CONFIG_PATH = join(homedir(), ".bacon", "config.json");
 
 // Recursively hunt for a file named `bacon-setup` under `root`. Claude Code's
 // on-disk plugin layout differs across versions (1.x vs 2.x put the marketplace
@@ -253,14 +249,10 @@ async function installPlugin(steps) {
   return false;
 }
 
-// `suspend(fn)` (built in main()) freezes the StepList spinner and calls
-// withSuspendedRender() (clear, no unmount) before running `fn`, then
-// un-freezes afterward.
-//
 // `bacon-setup init` is a one-shot, non-interactive check (it just writes
 // config and returns a status code — nothing here ever reads from stdin),
-// so unlike the login step below it has no need for `stdio: 'inherit'` or a
-// suspended window at all. It used to run with inherited stdio, which let
+// so unlike the login step below it has no need for `stdio: 'inherit'` at
+// all. It used to run with inherited stdio, which let
 // the script's own "✅ Config ready…" print land directly on the terminal
 // while step 3's live (not-yet-Static) row had just been erased for it —
 // the raw line then sat ABOVE this step's own heading once Ink resumed and
@@ -279,20 +271,31 @@ async function runSetupInit(steps, baconSetup) {
   }
 }
 
-async function runLogin(steps, baconSetup, suspend) {
-  // The "press ENTER" prompt and the login subprocess both need raw control
-  // of stdin/stdout, so the whole sequence runs inside the suspended window.
-  const r = await suspend(async () => {
-    print(
-      `\n  ${bright("Time to connect your account.")}`,
-      `  ${dim("Your browser will open to sign in with Clerk.")}`,
-      `  ${dim("No prompts, no typing — just click Allow.")}`
-    );
-    await prompt("Press ENTER to open the browser");
-    return spawnSync("python3", [baconSetup, "login"], { stdio: "inherit" });
-  });
+// `cmd_login()` in bacon-setup (verified by reading the actual script) opens
+// the browser itself via webbrowser.open() and waits on a local one-shot
+// http.server callback (the same pattern PostHog's own OAuth flow uses) —
+// it never reads stdin. So the only reason this ever needed `stdio: 'inherit'`
+// was architectural leftover; askConfirm below is the sole interactive part,
+// and it's Ink-native (no suspend, no raw stdio handoff at all).
+//
+// bacon-setup's own `main()` never calls sys.exit(1) when login fails or is
+// cancelled — cmd_login() returns None and the script exits 0 regardless —
+// so the subprocess's exit status can't tell us whether login succeeded.
+// Check ~/.bacon/config.json for a real clerk_token afterward instead.
+async function runLogin(steps, baconSetup, askConfirm) {
+  // AskConfirm/ConfirmInput only ever resolves `true` (confirmed) or
+  // CANCELLED (Escape/Ctrl+C/ConfirmInput's own cancel) — never plain false.
+  const proceed = await askConfirm(
+    "Time to connect your account. Your browser will open to sign in with Clerk — no prompts, no typing, just click Allow. Open the browser?"
+  );
+  if (proceed !== true) {
+    steps.failStep(4, "Skipped — run `bacon-setup login` manually to connect later.");
+    return false;
+  }
 
-  if (r.status !== 0) {
+  await spawnAsync("python3", [baconSetup, "login"]);
+
+  if (!hasClerkToken(CONFIG_PATH)) {
     steps.failStep(4, "Login failed — run `bacon-setup login` manually to retry.");
     return false;
   }
@@ -300,73 +303,70 @@ async function runLogin(steps, baconSetup, suspend) {
   return true;
 }
 
-async function configurePreferences(baconSetup, p, exitWith) {
-  // Arrow-key driven preferences via @clack/prompts (`p`). Frequency +
-  // personalization go to the local config via bacon-config. Surfaces are a
-  // multi-select: in-reply (default on; the advertiser — not the user — picks
-  // the strip/card/banner format) plus the statusline + thinking-verb opt-ins,
-  // which are enabled via bacon-setup (they edit ~/.claude/settings.json).
-  //
-  // This whole function runs while the Ink step-list tree is suspended (see
-  // the `suspend()` call around it in main()) — @clack/prompts owns the
-  // terminal for the duration, so any incidental messages here go through
-  // plain print(), the same as the rest of the suspended-window output.
+const CANCELLED = Symbol("cancelled");
+
+async function configurePreferences(baconSetup, { askSelect, askMultiSelect }, exitWith) {
+  // Ink-native arrow-key preferences (src/ui/Prompts.jsx), swapped into
+  // RunScreen's right pane in place of StepList — no suspend, no raw stdio
+  // handoff. Frequency + personalization go to local config via
+  // bacon-config. Surfaces is a multi-select: in-reply (default on; the
+  // advertiser — not the user — picks the strip/card/banner format) plus
+  // the statusline + thinking-verb opt-ins, enabled via bacon-setup (they
+  // edit ~/.claude/settings.json).
   const baconConfigPath = join(dirname(baconSetup), "bacon-config");
 
   const guard = (v) => {
-    if (p.isCancel(v)) {
-      p.cancel("Setup cancelled — finish anytime with /bacon:config");
-      exitWith(0); // routes through Ink's unmount() instead of a bare process.exit
-    }
+    if (v === CANCELLED) exitWith(0); // routes through Ink's unmount() instead of a bare process.exit
     return v;
   };
-  const setConfig = (cmd, value) => {
-    const r = spawnSync("python3", [baconConfigPath, cmd, value], { stdio: "pipe" });
+  const setConfig = async (cmd, value) => {
+    const r = await spawnAsync("python3", [baconConfigPath, cmd, value]);
     if (r.status !== 0) print(`  ${dim("·")} ${dim(`Could not set ${cmd} to ${value}`)}`);
   };
 
-  const frequency = guard(await p.select({
-    message: "How often should ads appear?",
-    initialValue: "standard",
-    options: [
-      { value: "minimal",  label: "Minimal",      hint: "~$0.40/mo · 1 per 20 prompts" },
-      { value: "standard", label: "Standard",     hint: "~$0.75/mo · 1 per 10 prompts" },
-      { value: "more",     label: "More",         hint: "~$1.50/mo · 1 per 5 prompts" },
-      { value: "max",      label: "Max",          hint: "~$3.75/mo · 1 per 2 prompts" },
-      { value: "every",    label: "Every prompt", hint: "~$7.50/mo" },
-    ],
-  }));
-  setConfig("frequency", frequency);
+  // Recommended option listed first in each — @inkjs/ui's Select always
+  // visually focuses options[0] on mount (see the comment on AskSelect in
+  // src/ui/Prompts.jsx), so this is what makes the sensible default the one
+  // that's pre-highlighted and instantly confirmable with a bare Enter.
+  const frequency = guard(await askSelect(
+    "How often should ads appear?",
+    [
+      { value: "standard", label: "Standard (recommended) — ~$0.75/mo · 1 per 10 prompts" },
+      { value: "minimal",  label: "Minimal — ~$0.40/mo · 1 per 20 prompts" },
+      { value: "more",     label: "More — ~$1.50/mo · 1 per 5 prompts" },
+      { value: "max",      label: "Max — ~$3.75/mo · 1 per 2 prompts" },
+      { value: "every",    label: "Every prompt — ~$7.50/mo" },
+    ]
+  ));
+  await setConfig("frequency", frequency);
 
-  const profile = guard(await p.select({
-    message: "Personalization (your prompts/code/keys are NEVER shared)",
-    initialValue: "anonymous",
-    options: [
-      { value: "anonymous", label: "Anonymous", hint: "no data shared · random ads" },
-      { value: "stack",     label: "Stack",     hint: "languages/deps shared · more relevant" },
-      { value: "full",      label: "Full",      hint: "stack + domain · most relevant (may earn more)" },
-    ],
-  }));
-  setConfig("profile", profile);
+  const profile = guard(await askSelect(
+    "Personalization (your prompts/code/keys are NEVER shared)",
+    [
+      { value: "anonymous", label: "Anonymous (recommended) — no data shared · random ads" },
+      { value: "stack",     label: "Stack — languages/deps shared · more relevant" },
+      { value: "full",      label: "Full — stack + domain · most relevant (may earn more)" },
+    ]
+  ));
+  await setConfig("profile", profile);
 
-  const surfaces = guard(await p.multiselect({
-    message: "Where can ads appear? (↑↓ move · space toggle · enter confirm)",
-    required: false,
-    initialValues: ["inreply"],
-    options: [
-      { value: "inreply",    label: "In replies",   hint: "default · advertiser sets the format" },
-      { value: "statusline", label: "Statusline",   hint: "animated sponsor in the status bar" },
-      { value: "spinner",    label: "Thinking verb", hint: "sponsored word while Claude works" },
+  const surfaces = guard(await askMultiSelect(
+    "Where can ads appear?",
+    [
+      { value: "inreply",    label: "In replies — default · advertiser sets the format" },
+      { value: "statusline", label: "Statusline — animated sponsor in the status bar" },
+      { value: "spinner",    label: "Thinking verb — sponsored word while Claude works" },
     ],
-  }));
+    ["inreply", "spinner"]
+  ));
 
-  setConfig("inreply", surfaces.includes("inreply") ? "on" : "off");
+  await setConfig("inreply", surfaces.includes("inreply") ? "on" : "off");
   if (surfaces.includes("statusline")) {
-    const r = spawnSync("python3", [baconSetup, "statusline-enable", "--style", "marquee"], { stdio: "pipe" });
+    const r = await spawnAsync("python3", [baconSetup, "statusline-enable", "--style", "marquee"]);
     if (r.status !== 0) print(`  ${dim("·")} ${dim("Could not enable statusline")}`);
   }
   if (surfaces.includes("spinner")) {
-    const r = spawnSync("python3", [baconSetup, "spinner-enable"], { stdio: "pipe" });
+    const r = await spawnAsync("python3", [baconSetup, "spinner-enable"]);
     if (r.status !== 0) print(`  ${dim("·")} ${dim("Could not enable thinking verb")}`);
   }
 }
@@ -427,6 +427,9 @@ function neutralizeFalseCiDetection() {
 // exited mid-alt-screen would strand the user's terminal showing nothing
 // until they ran `reset` or opened a new tab, so this cannot be left to
 // per-callsite discipline.
+// These are terminal-mode-switching escapes, not color output — they are
+// intentionally NOT gated on NO_COLOR (out of scope for that convention,
+// which only covers color).
 const ENTER_ALT_SCREEN = "\x1b[?1049h\x1b[2J\x1b[H";
 const LEAVE_ALT_SCREEN = "\x1b[0m\x1b[?1049l";
 
@@ -438,13 +441,32 @@ function leaveAltScreen() {
 }
 
 async function main() {
+  // Both stdin AND stdout must be a real TTY: this wizard requires genuine
+  // interactivity (browser login, an arrow-key preference menu), and a
+  // non-TTY stdout would garble full-screen/alt-screen rendering even with
+  // an interactive stdin. Check this before anything else — before writing
+  // ENTER_ALT_SCREEN, before registering the exit handler, before any
+  // dynamic import — so a piped/non-interactive invocation fails fast with
+  // a clear message instead of constructing an Ink render tree and then
+  // hanging forever on the login/menu steps waiting for input that will
+  // never come.
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    console.error(
+      "bacon-wizard requires an interactive terminal (TTY) to run.\n" +
+      "It looks like input or output is piped/non-interactive.\n" +
+      "Run it directly in a terminal, or complete setup via Claude Code with /bacon:setup."
+    );
+    process.exit(1);
+    return;
+  }
+
   process.stdout.write(ENTER_ALT_SCREEN);
   process.on("exit", leaveAltScreen);
 
   neutralizeFalseCiDetection();
 
   // Ink/React/the UI components are ESM-only; load them via dynamic import
-  // from this CJS bin, same pattern already used for @clack/prompts below.
+  // from this CJS bin.
   const [
     { default: React },
     { render },
@@ -452,7 +474,9 @@ async function main() {
     { default: HeaderBar },
     { default: RunScreen },
     { default: OutroScreen },
-    { useWizardSteps, withSuspendedRender },
+    { useWizardSteps },
+    { AskConfirm, AskSelect, AskMultiSelect },
+    { default: figures },
   ] = await Promise.all([
     import("react"),
     import("ink"),
@@ -461,28 +485,43 @@ async function main() {
     import("../dist/ui/RunScreen.js"),
     import("../dist/ui/OutroScreen.js"),
     import("../dist/ui/useWizardSteps.js"),
+    import("../dist/ui/Prompts.js"),
+    import("figures"),
   ]);
 
   // One persistent Ink instance for the whole process — render() is called
   // exactly once here, unmount() exactly once at the end (or on a fatal
-  // exit). Earlier this app fully unmounted/remounted Ink around every
-  // raw-stdio window, which repainted the entire tree (banner included)
-  // from scratch each time — see the doc comment on withSuspendedRender()
-  // in useWizardSteps.js for the full explanation of why that duplicated
-  // output and why a single persistent instance fixes it structurally.
+  // exit). Ink is never suspended and never hands raw stdio to a
+  // subprocess — login (askConfirm) and preferences (askSelect/
+  // askMultiSelect) are Ink-native prompts rendered in place of StepList's
+  // right pane, resolved via the `picker` state below.
   //
   // `controllerRef` points at the current render's { steps, startStep,
-  // okStep, failStep, addNote, setStage, setSuspended, setLoggedIn }
-  // bundle. No eventLog/replay is needed anymore — there's only ever one
-  // hook instance for the life of the process.
+  // okStep, failStep, addNote, setStage, setLoggedIn, setPicker } bundle.
   const controllerRef = { current: null };
 
   function App() {
     const wiz = useWizardSteps(STEP_LABELS);
     const [stage, setStage] = React.useState("intro");
-    const [suspended, setSuspended] = React.useState(false);
     const [loggedIn, setLoggedIn] = React.useState(false);
-    controllerRef.current = { ...wiz, setStage, setSuspended, setLoggedIn };
+    const [picker, setPicker] = React.useState(null);
+    controllerRef.current = { ...wiz, setStage, setLoggedIn, setPicker };
+
+    // `picker`, when set, renders in place of StepList in RunScreen's right
+    // pane (see RunScreen.jsx's `pickerNode` prop) — the ask*() bridge
+    // functions below set/clear it around each interactive prompt.
+    const pickerNode = !picker ? null : React.createElement(
+      picker.type === "confirm" ? AskConfirm
+        : picker.type === "select" ? AskSelect
+        : AskMultiSelect,
+      {
+        message: picker.message,
+        options: picker.options,
+        initialValues: picker.initialValues,
+        onSubmit: picker.resolve,
+        onCancel: () => picker.resolve(CANCELLED),
+      }
+    );
 
     // Exactly one stage's content renders below the header at a time —
     // switching stages fully replaces the previous stage's content instead
@@ -494,7 +533,7 @@ async function main() {
       stage === "outro"
         ? React.createElement(OutroScreen, { loggedIn })
         : stage === "run"
-        ? React.createElement(RunScreen, { steps: wiz.steps, total: STEP_LABELS.length, suspended })
+        ? React.createElement(RunScreen, { steps: wiz.steps, total: STEP_LABELS.length, pickerNode })
         : React.createElement(Banner);
 
     return React.createElement(
@@ -560,55 +599,46 @@ async function main() {
     },
   };
 
-  // Freezes the StepList spinner (so it can't self-trigger a repaint),
-  // hands the terminal to `fn` via withSuspendedRender() (clear, but no
-  // unmount), then un-freezes.
-  async function suspend(fn) {
-    controllerRef.current.setSuspended(true);
-    // setSuspended(true) (plus whatever step-status update just preceded
-    // this call, e.g. startStep()) is an async React state update — it
-    // queues a re-render that isn't guaranteed to have committed and
-    // flushed to stdout by the time this function continues. Verified via
-    // a real PTY capture (rendered through pyte) that without waiting here,
-    // that pending repaint can flush AFTER fn() has already started writing
-    // raw output (readline's prompt text), gluing the header bar onto it
-    // with no separating newline. This 100ms wait reliably avoids that in
-    // realistic usage — also verified via a PTY capture with a *simulated
-    // real keypress* (~1.2s reaction time before answering the prompt),
-    // which renders cleanly. The theoretical race only reopens if fn()'s
-    // own first await never resolves at all (e.g. stdin is closed/non-TTY,
-    // so readline's prompt hangs forever) — a real interactive user always
-    // takes far longer than 100ms to react, so this is accepted as a
-    // non-interactive-environment edge case, not a real-usage bug.
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    try {
-      return await withSuspendedRender(inkInstance, fn);
-    } finally {
-      // fn()'s raw output (readline/clack/a subprocess) doesn't guarantee it
-      // ends with a trailing newline — e.g. readline's rl.question() leaves
-      // the cursor right after the prompt text until the user's Enter is
-      // echoed, which doesn't always happen (non-interactive stdin, some
-      // terminal modes). A bare "\n" is NOT enough here: it's a line feed
-      // only — it moves the cursor down a row but does not reset the
-      // column, unless the terminal's ONLCR driver setting happens to
-      // translate it to CRLF (verified via a real PTY capture, rendered
-      // through pyte, that this is not guaranteed — readline can leave the
-      // cursor at an arbitrary column, e.g. matching the prompt text's
-      // length, and Ink's next frame then starts painting from THAT column
-      // instead of column 0, gluing its first line onto the tail of
-      // whatever fn() last printed). Write "\r\n" explicitly so both the
-      // column reset and the line advance happen regardless of terminal
-      // driver settings.
-      process.stdout.write("\r\n");
-      controllerRef.current.setSuspended(false);
-    }
+  // Bridge from imperative main()-flow code to the Ink-native prompts: each
+  // sets `picker` (rendered in RunScreen's right pane, see App() above) and
+  // resolves when the prompt component calls back, then clears `picker`
+  // before returning the value to the caller.
+  function askConfirm(message) {
+    return new Promise((resolve) => {
+      controllerRef.current.setPicker({
+        type: "confirm",
+        message,
+        resolve: (v) => { controllerRef.current.setPicker(null); resolve(v); },
+      });
+    });
+  }
+  function askSelect(message, options) {
+    return new Promise((resolve) => {
+      controllerRef.current.setPicker({
+        type: "select",
+        message,
+        options,
+        resolve: (v) => { controllerRef.current.setPicker(null); resolve(v); },
+      });
+    });
+  }
+  function askMultiSelect(message, options, initialValues) {
+    return new Promise((resolve) => {
+      controllerRef.current.setPicker({
+        type: "multiselect",
+        message,
+        options,
+        initialValues,
+        resolve: (v) => { controllerRef.current.setPicker(null); resolve(v); },
+      });
+    });
   }
 
   function exitWith(code) {
     try { inkInstance.unmount(); } catch { /* already unmounted */ }
     leaveAltScreen();
     if (code !== 0 && lastFailureMessage) {
-      print("", fail("  ✗ " + lastFailureMessage), "");
+      print("", fail(`  ${figures.cross} ` + lastFailureMessage), "");
     }
     process.exit(code);
   }
@@ -643,13 +673,12 @@ async function main() {
 
   // Step 4 — connect account
   steps.startStep(4);
-  const loggedIn = await runLogin(steps, baconSetup, suspend);
+  const loggedIn = await runLogin(steps, baconSetup, askConfirm);
   controllerRef.current.setLoggedIn(loggedIn);
 
-  // Step 5 — ad preferences (@clack/prompts, ESM-only, dynamic import)
+  // Step 5 — ad preferences
   steps.startStep(5);
-  const clack = await import("@clack/prompts");
-  await suspend(() => configurePreferences(baconSetup, clack, exitWith));
+  await configurePreferences(baconSetup, { askSelect, askMultiSelect }, exitWith);
   const onboarded = markOnboarded(baconSetup);
   if (!onboarded) steps.addNote(5, "Could not mark onboarding complete");
   steps.okStep(5, "Preferences saved");
@@ -661,7 +690,7 @@ async function main() {
   await new Promise((resolve) => setTimeout(resolve, 50));
   inkInstance.unmount();
   leaveAltScreen();
-  printOutroSummary(loggedIn);
+  printOutroSummary(loggedIn, figures);
 }
 
 main().catch((e) => {

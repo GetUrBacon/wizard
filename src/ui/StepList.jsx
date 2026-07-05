@@ -1,26 +1,8 @@
 import React from 'react';
 import { Box, Text, Static } from 'ink';
+import { Spinner as InkSpinner } from '@inkjs/ui';
+import figures from 'figures';
 import { GREEN, DIM, BRIGHT, FAIL } from './theme.js';
-
-const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-
-// While `suspended` (a raw-stdio window is open — see withSuspendedRender in
-// useWizardSteps.js), the interval is skipped entirely so this component
-// never triggers a state change, and therefore never triggers an Ink
-// repaint, while a subprocess/readline/clack owns the terminal.
-function Spinner({ suspended }) {
-  const [frameIndex, setFrameIndex] = React.useState(0);
-
-  React.useEffect(() => {
-    if (suspended) return undefined;
-    const interval = setInterval(() => {
-      setFrameIndex((prev) => (prev + 1) % SPINNER_FRAMES.length);
-    }, 80);
-    return () => clearInterval(interval);
-  }, [suspended]);
-
-  return <Text color={BRIGHT}>{SPINNER_FRAMES[frameIndex]}</Text>;
-}
 
 // Each row is an icon/prefix (fixed width, flexShrink: 0) next to a
 // message that can wrap on its own (flexGrow: 1). The narrower half-width
@@ -41,12 +23,12 @@ function PendingRow({ step }) {
   );
 }
 
-function RunningRow({ step, suspended }) {
+function RunningRow({ step }) {
   return (
     <Box>
       <Box flexShrink={0}>
         <Text>  </Text>
-        <Spinner suspended={suspended} />
+        <InkSpinner />
         <Text> </Text>
       </Box>
       <Box flexGrow={1}>
@@ -60,7 +42,7 @@ function OkRow({ step }) {
   return (
     <Box>
       <Box flexShrink={0}>
-        <Text color={GREEN}>  ✓ </Text>
+        <Text color={GREEN}>  {figures.tick} </Text>
       </Box>
       <Box flexGrow={1}>
         <Text>{step.message}</Text>
@@ -73,7 +55,7 @@ function FailRow({ step }) {
   return (
     <Box>
       <Box flexShrink={0}>
-        <Text color={FAIL}>  ✗ </Text>
+        <Text color={FAIL}>  {figures.cross} </Text>
       </Box>
       <Box flexGrow={1}>
         <Text>{step.message}</Text>
@@ -89,7 +71,7 @@ const STATUS_ROWS = {
   fail: FailRow,
 };
 
-function StepRow({ step, total, suspended }) {
+function StepRow({ step, total }) {
   const StatusRow = STATUS_ROWS[step.status];
 
   return (
@@ -102,7 +84,7 @@ function StepRow({ step, total, suspended }) {
           <Text color={BRIGHT}>{step.label}</Text>
         </Box>
       </Box>
-      {StatusRow ? <StatusRow step={step} suspended={suspended} /> : null}
+      {StatusRow ? <StatusRow step={step} /> : null}
       {step.notes.map((note, index) => (
         <Box key={`note-${step.n}-${index}`}>
           <Box flexShrink={0}>
@@ -132,7 +114,7 @@ const HEADING = { __heading: true };
 // This relies on `finished` only ever growing — steps move
 // pending -> running -> ok-or-fail and never revert, which is already true
 // of this codebase's step state machine.
-export default function StepList({ steps, total, suspended = false, showHeading = true }) {
+export default function StepList({ steps, total, showHeading = true }) {
   const finished = steps.filter((s) => s.status === 'ok' || s.status === 'fail');
   const live = steps.filter((s) => s.status === 'pending' || s.status === 'running');
   const staticItems = showHeading ? [HEADING, ...finished] : finished;
@@ -149,12 +131,12 @@ export default function StepList({ steps, total, suspended = false, showHeading 
               <Text />
             </React.Fragment>
           ) : (
-            <StepRow key={item.n} step={item} total={total} suspended={suspended} />
+            <StepRow key={item.n} step={item} total={total} />
           )
         }
       </Static>
       {live.map((step) => (
-        <StepRow key={step.n} step={step} total={total} suspended={suspended} />
+        <StepRow key={step.n} step={step} total={total} />
       ))}
     </Box>
   );

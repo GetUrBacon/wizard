@@ -1,5 +1,6 @@
 import React from 'react';
 import { Box, Text } from 'ink';
+import figures from 'figures';
 import { GREEN, DIM, BRIGHT, WARN, MONO } from './theme.js';
 
 // Ink port of the old plain-print()-based showDone() — same content, same
@@ -11,7 +12,7 @@ export default function OutroScreen({ loggedIn }) {
       <Text />
       <Text color={DIM}>{'  ' + '─'.repeat(48)}</Text>
       <Text />
-      <Text color={GREEN}>  ✓ Bacon is set up!</Text>
+      <Text color={GREEN}>  {figures.tick} Bacon is set up!</Text>
       <Text />
       {loggedIn ? (
         <Box>
