@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Text, Static } from 'ink';
+import { Box, Text } from 'ink';
 import { Spinner as InkSpinner } from '@inkjs/ui';
 import figures from 'figures';
 import { GREEN, DIM, BRIGHT, FAIL } from './theme.js';
@@ -99,43 +99,32 @@ function StepRow({ step, total }) {
   );
 }
 
-const HEADING = { __heading: true };
-
-// Ink's <Static> writes its flushed items directly to permanent terminal
-// scrollback and removes them from the live-redraw region. If the "Tasks"
-// heading were rendered as a plain sibling before a separate <Static> block,
-// it would look fine initially but then visually drift downward every time
-// a step finishes, because the heading is part of the live region that gets
-// erased-and-redrawn below whatever <Static> just flushed. The fix: put the
-// heading INSIDE the same Static items array, as a leading sentinel object,
-// so it is flushed exactly once, permanently, before any step rows, and is
-// never part of the live-redraw region.
+// This used to flush completed rows through Ink's <Static> (to avoid
+// re-printing the whole tree — including HeaderBar and LearnPane — into
+// the user's real terminal scrollback on every step). <Static> content is
+// committed to the terminal immediately and can never be repositioned by a
+// later re-render, which caused a recurring class of bugs once it had to
+// coexist with anything else that's live and redraws on its own schedule:
+// the "Tasks" heading drifting below newly-flushed rows, <Static> re-
+// flushing everything from scratch on remount, and (confirmed in a real
+// v0.4.1 run) the always-live HeaderBar visually detaching above the
+// permanently-flushed rows because it keeps redrawing below each new flush.
 //
-// This relies on `finished` only ever growing — steps move
-// pending -> running -> ok-or-fail and never revert, which is already true
-// of this codebase's step state machine.
+// Now that the whole wizard renders into the alternate screen buffer (see
+// bin/wizard.cjs's ENTER_ALT_SCREEN) — discarded wholesale on exit, never
+// touching real scrollback — <Static>'s original justification no longer
+// applies. Render the full list live every time instead, exactly the way
+// PostHog's own wizard does (confirmed zero <Static> usage anywhere in
+// their TUI). A brief full-tree redraw per step is imperceptible in this
+// ~10-30 second flow and keeps HeaderBar/Tasks as one cohesive block.
 export default function StepList({ steps, total }) {
-  const finished = steps.filter((s) => s.status === 'ok' || s.status === 'fail');
-  const live = steps.filter((s) => s.status === 'pending' || s.status === 'running');
-  const staticItems = [HEADING, ...finished];
-
   return (
     <Box flexDirection="column">
-      <Static items={staticItems}>
-        {(item) =>
-          item.__heading ? (
-            <React.Fragment key="heading">
-              <Text color={GREEN} bold>
-                Tasks
-              </Text>
-              <Text />
-            </React.Fragment>
-          ) : (
-            <StepRow key={item.n} step={item} total={total} />
-          )
-        }
-      </Static>
-      {live.map((step) => (
+      <Text color={GREEN} bold>
+        Tasks
+      </Text>
+      <Text />
+      {steps.map((step) => (
         <StepRow key={step.n} step={step} total={total} />
       ))}
     </Box>

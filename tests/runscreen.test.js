@@ -14,10 +14,10 @@ function lineIndexOf(frame, needle) {
   return lines.findIndex((line) => line.includes(needle));
 }
 
-// Note: deliberately comparing against StepList's live "[n/total] label" row
-// ("Install plugin"), not its "Tasks" heading — "Tasks" is flushed through
-// <Static>, which Ink always renders ahead of all live content regardless
-// of row/column layout, so it can't be used to detect stacked-vs-side-by-side.
+// Both panes now have the same shape — a heading line, a blank line, then
+// content (StepList dropped <Static> entirely, see its default export's
+// doc comment, so "Tasks" is plain live content symmetric with "Learn") —
+// so comparing the two headings directly is the simplest layout check.
 
 test('stacks Learn above Tasks on narrow terminals (<80 columns)', (t) => {
   const original = process.stdout.columns;
@@ -34,12 +34,12 @@ test('stacks Learn above Tasks on narrow terminals (<80 columns)', (t) => {
   const frame = lastFrame();
 
   const learnLine = lineIndexOf(frame, 'Learn');
-  const stepLine = lineIndexOf(frame, 'Install plugin');
+  const tasksLine = lineIndexOf(frame, 'Tasks');
 
   assert.ok(learnLine !== -1, 'expected "Learn" heading to render');
-  assert.ok(stepLine !== -1, 'expected the step row to render');
-  assert.notEqual(learnLine, stepLine, 'expected Learn and the step row on separate (stacked) lines');
-  assert.ok(learnLine < stepLine, 'expected Learn above the step row when stacked');
+  assert.ok(tasksLine !== -1, 'expected "Tasks" heading to render');
+  assert.notEqual(learnLine, tasksLine, 'expected Learn and Tasks on separate (stacked) lines');
+  assert.ok(learnLine < tasksLine, 'expected Learn above Tasks when stacked');
 });
 
 test('shows Learn and Tasks side-by-side on wide terminals (>=80 columns)', (t) => {
@@ -54,11 +54,11 @@ test('shows Learn and Tasks side-by-side on wide terminals (>=80 columns)', (t) 
   const frame = lastFrame();
 
   const learnLine = lineIndexOf(frame, 'Learn');
-  const stepLine = lineIndexOf(frame, 'Install plugin');
+  const tasksLine = lineIndexOf(frame, 'Tasks');
 
   assert.ok(learnLine !== -1, 'expected "Learn" heading to render');
-  assert.ok(stepLine !== -1, 'expected the step row to render');
-  assert.equal(learnLine, stepLine, 'expected Learn and the step row sharing a row when side-by-side');
+  assert.ok(tasksLine !== -1, 'expected "Tasks" heading to render');
+  assert.equal(learnLine, tasksLine, 'expected Learn and Tasks sharing a row when side-by-side');
 });
 
 function countOccurrences(haystack, needle) {
@@ -74,13 +74,16 @@ function countOccurrences(haystack, needle) {
 }
 
 // Regression test: RunScreen used to swap `pickerNode ?? <StepList>` at the
-// same JSX position, which unmounts StepList (destroying <Static>'s flush
-// tracking) every time a picker opens, and mounts a brand-new StepList when
-// it closes — causing <Static> to re-flush the entire finished-steps array
-// from scratch each time, duplicating every already-completed step row in
-// permanent scrollback once per picker open/close cycle (login confirm +
-// 3 preference prompts in the real flow). StepList must now stay mounted
-// (hidden via `display: none`) the whole time a picker is open.
+// same JSX position, which unmounted StepList every time a picker opened
+// and mounted a brand-new one when it closed. Back when StepList used
+// <Static> for completed rows, that remount destroyed Static's internal
+// flush-tracking, causing it to re-flush the entire finished-steps array
+// from scratch each time — duplicating every already-completed row once
+// per picker open/close cycle (login confirm + 3 preference prompts in the
+// real flow). StepList no longer uses <Static> at all (see its default
+// export's doc comment), which removes that specific failure mode — but
+// StepList must still stay mounted (hidden via `display: none`) rather than
+// unmounted while a picker is open, so this guards the general behavior.
 test('opening and closing pickerNode repeatedly does not duplicate finished step rows', () => {
   const steps = [
     { n: 1, label: 'Install plugin', status: 'ok', message: 'Plugin installed', notes: [] },

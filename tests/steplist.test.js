@@ -77,11 +77,10 @@ test('fail step renders an X mark and the step message', () => {
   assert.ok(frame.includes('Plugin install failed'));
 });
 
-// Regression test for the Static-heading-drift bug: the "Tasks" heading must
-// be flushed into Static exactly once, as a leading sentinel item, alongside
-// the finished rows — never rendered as a separate live sibling — or it will
-// re-render (and therefore appear to duplicate/drift) every time a step
-// transitions out of the live region.
+// General regression guard: since StepList re-renders the full list live on
+// every step transition (no <Static> — see the comment on the default export
+// below for why), nothing about that should ever cause the heading or an
+// already-finished row's message to appear more than once as steps complete.
 test('heading appears exactly once and no row duplicates as steps complete in n-order', () => {
   const labels = ['Install plugin', 'Connect account', 'Verify setup'];
   let steps = labels.map((label, i) => ({
