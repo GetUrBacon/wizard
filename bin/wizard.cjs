@@ -607,7 +607,6 @@ async function main() {
     { useWizardSteps },
     { AskConfirm, AskSelect, AskMultiSelect },
     { default: KeyboardHintsBar },
-    { default: TabContainer },
     { default: ScreenContainer },
     { default: figures },
     { SUCCESS, MUTED, PRIMARY, WARNING, LINK, ERROR },
@@ -621,15 +620,10 @@ async function main() {
     import("../dist/ui/useWizardSteps.js"),
     import("../dist/ui/Prompts.js"),
     import("../dist/ui/KeyboardHintsBar.js"),
-    import("../dist/ui/TabContainer.js"),
     import("../dist/ui/ScreenContainer.js"),
     import("figures"),
     import("../dist/ui/theme.js"),
   ]);
-  void TabContainer; // wrapping now lives inside RunScreen.jsx itself, which already
-  // has the `steps` prop in scope — imported here only for parity/consistency
-  // with the rest of this dynamic-import block, not because bin/wizard.cjs
-  // needs to render it directly.
   // theme.js's exported names are now ANSI color names (see src/ui/theme.js),
   // not hex strings — chalk[name] (e.g. chalk.green) is the correct mapping,
   // not chalk.hex(name). BRAND_GREEN/CREAM/DARK (unused here) are the only
