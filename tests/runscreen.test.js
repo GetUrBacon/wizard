@@ -81,9 +81,11 @@ function countOccurrences(haystack, needle) {
 // from scratch each time — duplicating every already-completed row once
 // per picker open/close cycle (login confirm + 3 preference prompts in the
 // real flow). StepList no longer uses <Static> at all (see its default
-// export's doc comment), which removes that specific failure mode — but
-// StepList must still stay mounted (hidden via `display: none`) rather than
-// unmounted while a picker is open, so this guards the general behavior.
+// export's doc comment), which removes that specific failure mode — and
+// StepList now stays mounted AND visible (not hidden via `display: none`)
+// the whole time, including while a picker is open, so users keep seeing
+// their progress. This test guards the general behavior: no duplication
+// across repeated picker open/close cycles.
 test('opening and closing pickerNode repeatedly does not duplicate finished step rows', () => {
   const steps = [
     { n: 1, label: 'Install plugin', status: 'ok', message: 'Plugin installed', notes: [] },
@@ -116,4 +118,25 @@ test('opening and closing pickerNode repeatedly does not duplicate finished step
   // regression of the duplicate-flush bug this test otherwise guards
   // against (Tasks still appears exactly once above).
   assert.equal(countOccurrences(frame, 'Account connected'), 2, 'latest step message should appear once in StepList and once in the TabContainer status line');
+});
+
+test('completed step progress stays visible while a picker is open', () => {
+  const steps = [
+    { n: 1, label: 'Install plugin', status: 'ok', message: 'Plugin installed', notes: [] },
+    { n: 2, label: 'Connect account', status: 'ok', message: 'Account connected', notes: [] },
+    { n: 3, label: 'Choose ad preferences', status: 'running', activeLabel: 'Choosing ad preferences…', notes: [] },
+  ];
+  const picker = React.createElement(Text, null, 'How often should ads appear?');
+
+  const { lastFrame, unmount } = render(
+    React.createElement(RunScreen, { steps, total: steps.length, pickerNode: picker })
+  );
+  const frame = lastFrame();
+  unmount();
+
+  assert.ok(frame.includes('Tasks'), 'expected the Tasks heading to still render while a picker is open');
+  assert.ok(frame.includes('Plugin installed'), 'expected a completed step\'s message to stay visible while a picker is open');
+  assert.ok(frame.includes('Account connected'), 'expected a completed step\'s message to stay visible while a picker is open');
+  assert.ok(frame.includes('Progress: 2/3 completed'), 'expected the progress footer to stay visible while a picker is open');
+  assert.ok(frame.includes('How often should ads appear?'), 'expected the picker itself to still render');
 });

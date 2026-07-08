@@ -16,21 +16,21 @@ import { useTerminalWidth } from './useTerminalWidth.js';
 // this matches the rest of the app's preference for showing full detail
 // (notes, addNote calls) over dropping content on narrow terminals.
 //
-// `pickerNode`, when provided, visually covers StepList in the right pane —
-// used while an Ask* prompt (see src/ui/Prompts.jsx) needs the space step
-// 5's row would otherwise occupy. LearnPane keeps rendering throughout.
+// `pickerNode`, when provided (while an Ask* prompt from src/ui/Prompts.jsx
+// is open), renders below StepList in the right pane — so completed/running
+// step progress stays visible while the user answers a prompt, instead of
+// being replaced by it. LearnPane keeps rendering throughout.
 //
-// StepList is ALWAYS rendered here (never conditionally swapped out for
-// pickerNode) — confirmed as a real bug in production: swapping between
-// `pickerNode` and `<StepList>` at the same JSX position via `??` made
-// React unmount StepList every time a picker opened, which destroys
-// <Static>'s internal flush-tracking (see StepList.jsx). On remount,
-// <Static> treats the entire current `finished` array as brand-new and
-// re-flushes all of it to permanent scrollback again — once per picker
-// (login confirm + 3 preference prompts), so real runs printed the whole
-// step list 3+ times over. Hiding via `display: 'none'` instead of
-// unmounting keeps StepList (and Static's tracking) alive for the whole
-// run; only its visibility toggles.
+// StepList is ALWAYS rendered and ALWAYS visible here (never conditionally
+// swapped out for, or hidden behind, pickerNode). It used to be hidden via
+// `display: 'none'` while a picker was open — a workaround for a since-fixed
+// bug where swapping `pickerNode ?? <StepList>` at the same JSX position
+// unmounted StepList on every picker open, which broke <Static>'s internal
+// flush-tracking (re-flushing the whole finished-steps array to scrollback
+// each time). StepList has since dropped <Static> entirely (see its default
+// export's doc comment), removing that failure mode, so there's no longer
+// any reason to hide the list while a picker is open — showing it is what
+// users actually want (visible progress while answering a prompt).
 export default function RunScreen({ steps, total, pickerNode }) {
   const width = useTerminalWidth();
   const isNarrow = width < 80;
@@ -42,9 +42,7 @@ export default function RunScreen({ steps, total, pickerNode }) {
           <LearnPane />
         </Box>
         <Box width={isNarrow ? undefined : '50%'} flexDirection="column">
-          <Box display={pickerNode ? 'none' : 'flex'} flexDirection="column">
-            <StepList steps={steps} total={total} />
-          </Box>
+          <StepList steps={steps} total={total} />
           {pickerNode}
         </Box>
       </Box>
