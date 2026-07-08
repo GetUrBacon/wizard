@@ -1,7 +1,7 @@
 import React from 'react';
 import { Box, Text, useInput } from 'ink';
 import { ConfirmInput, Select, MultiSelect } from '@inkjs/ui';
-import { GREEN, BRIGHT } from './theme.js';
+import { PRIMARY } from './theme.js';
 
 // None of @inkjs/ui's input components have built-in cancel handling (no
 // onCancel/escape support — verified against their source), so each of these
@@ -19,7 +19,7 @@ export function AskConfirm({ message, onSubmit, onCancel }) {
   useCancelKey(onCancel);
   return (
     <Box flexDirection="column">
-      <Text color={BRIGHT}>{message}</Text>
+      <Text color={PRIMARY}>{message}</Text>
       <Box marginTop={1}>
         <ConfirmInput onConfirm={() => onSubmit(true)} onCancel={onCancel} />
       </Box>
@@ -42,7 +42,7 @@ export function AskSelect({ message, options, onSubmit, onCancel }) {
   useCancelKey(onCancel);
   return (
     <Box flexDirection="column">
-      <Text color={BRIGHT} bold>{message}</Text>
+      <Text color={PRIMARY} bold>{message}</Text>
       <Box marginTop={1}>
         <Select options={options} onChange={onSubmit} />
       </Box>
@@ -54,7 +54,7 @@ export function AskMultiSelect({ message, options, initialValues, onSubmit, onCa
   useCancelKey(onCancel);
   return (
     <Box flexDirection="column">
-      <Text color={BRIGHT} bold>{message}</Text>
+      <Text color={PRIMARY} bold>{message}</Text>
       <Box marginTop={1}>
         {/* Unlike Select above, MultiSelect's `defaultValue` (pre-checked options
             by value) is NOT subject to the same bug: a multi-select's set of
@@ -62,9 +62,6 @@ export function AskMultiSelect({ message, options, initialValues, onSubmit, onCa
             focus, whereas Select's single `value` is tied to whatever option is
             focused when Enter is pressed. */}
         <MultiSelect options={options} defaultValue={initialValues} onSubmit={onSubmit} />
-      </Box>
-      <Box marginTop={1}>
-        <Text color={GREEN} dimColor>space toggle · enter confirm · esc cancel</Text>
       </Box>
     </Box>
   );

@@ -1,6 +1,6 @@
 import React from 'react';
 import { Box, Text } from 'ink';
-import { DIM, BRIGHT, GREEN } from './theme.js';
+import { MUTED, PRIMARY, SUCCESS } from './theme.js';
 
 // Real facts about the Bacon ad network — not fabricated data. Unlike
 // PostHog's Learn deck (which visualizes the user's own product analytics),
@@ -53,15 +53,15 @@ export default function LearnPane() {
 
   return (
     <Box flexDirection="column">
-      <Text color={GREEN} bold>
+      <Text color={SUCCESS} bold>
         Learn
       </Text>
       <Text />
-      <Text color={BRIGHT} bold>
+      <Text color={PRIMARY} bold>
         {blurb.heading}
       </Text>
       {blurb.lines.map((line, i) => (
-        <Text key={`line-${i}`} color={DIM}>
+        <Text key={`line-${i}`} color={MUTED}>
           {line}
         </Text>
       ))}

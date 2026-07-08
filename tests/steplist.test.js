@@ -17,54 +17,46 @@ function makeStep(overrides) {
   };
 }
 
-test('pending step renders the dim middle-dot marker and its label, no check/X', () => {
+test('pending step renders the open-square marker and its label, no check/X', () => {
   const steps = [makeStep({ status: 'pending', label: 'Install plugin' })];
   const { lastFrame } = render(React.createElement(StepList, { steps, total: 1 }));
   const frame = lastFrame();
 
-  assert.ok(frame.includes('· '));
+  assert.ok(frame.includes('◻'));
   assert.ok(frame.includes('Install plugin'));
   assert.ok(!frame.includes(figures.tick));
   assert.ok(!frame.includes(figures.cross));
 });
 
-// @inkjs/ui's Spinner mounts a real setInterval, so every running-step test
-// below must unmount() or the interval keeps the test file's process alive
-// indefinitely. lastFrame() is synchronous, called before the interval's
-// first 80ms tick, so the first rendered frame is deterministic:
-// cli-spinners' 'dots' frame[0].
-test('running step renders the deterministic first spinner frame and activeLabel/label', () => {
+// The running row used to show an @inkjs/ui Spinner (a setInterval-driven
+// animation); it now renders a static '▶' glyph instead (see StepList.jsx's
+// header comment — this removes an interval-driven re-render that was
+// implicated in a confirmed redraw-tearing bug), so no unmount()-in-finally
+// dance is needed here anymore.
+test('running step renders the static triangle glyph and activeLabel/label', () => {
   const steps = [
     makeStep({ status: 'running', label: 'Install plugin', activeLabel: 'Installing plugin…' }),
   ];
-  const { lastFrame, unmount } = render(React.createElement(StepList, { steps, total: 1 }));
-  try {
-    const frame = lastFrame();
-    assert.ok(frame.includes('⠋'));
-    assert.ok(frame.includes('Installing plugin…'));
-  } finally {
-    unmount();
-  }
+  const { lastFrame } = render(React.createElement(StepList, { steps, total: 1 }));
+  const frame = lastFrame();
+  assert.ok(frame.includes('▶'));
+  assert.ok(frame.includes('Installing plugin…'));
 });
 
 test('running step falls back to label when activeLabel is unset', () => {
   const steps = [makeStep({ status: 'running', label: 'Install plugin' })];
-  const { lastFrame, unmount } = render(React.createElement(StepList, { steps, total: 1 }));
-  try {
-    const frame = lastFrame();
-    assert.ok(frame.includes('⠋'));
-    assert.ok(frame.includes('Install plugin'));
-  } finally {
-    unmount();
-  }
+  const { lastFrame } = render(React.createElement(StepList, { steps, total: 1 }));
+  const frame = lastFrame();
+  assert.ok(frame.includes('▶'));
+  assert.ok(frame.includes('Install plugin'));
 });
 
-test('ok step renders a checkmark and the step message', () => {
+test('ok step renders a filled square and the step message', () => {
   const steps = [makeStep({ status: 'ok', message: 'Plugin already installed' })];
   const { lastFrame } = render(React.createElement(StepList, { steps, total: 1 }));
   const frame = lastFrame();
 
-  assert.ok(frame.includes(figures.tick));
+  assert.ok(frame.includes('◼'));
   assert.ok(frame.includes('Plugin already installed'));
 });
 

@@ -25,7 +25,7 @@ const { hasClerkToken } = require("./config-utils.cjs");
 // process.env` branch is needed or wanted here — see tests/no-color.test.js.
 //
 // These are assigned once, inside main(), from src/ui/theme.js's exported
-// hex constants — theme.js is ESM-only, so it's loaded via the same
+// ANSI color name constants — theme.js is ESM-only, so it's loaded via the same
 // dynamic-import Promise.all() as ink/react/etc. Declaring them here (rather
 // than inside main()) lets printOutroSummary() and configurePreferences()
 // — both module-scope functions defined outside main() — keep closing over
@@ -472,6 +472,36 @@ function ask(controllerRef, type, props) {
 // dynamic-import scope. `controllerRef` points at the current render's
 // { steps, startStep, okStep, failStep, addNote, setStage, setLoggedIn,
 // setPicker } bundle.
+// Pure function computing the hint pairs shown in KeyboardHintsBar at the
+// bottom of the screen: empty unless we're on the 'run' stage with an active
+// picker, in which case the hints match whichever Ask* component (see
+// src/ui/Prompts.jsx) is currently rendered in place of StepList.
+function computeKeyboardHints(stage, pickerType) {
+  if (stage !== "run" || !pickerType) return [];
+  if (pickerType === "confirm") {
+    return [
+      { label: "enter", action: "confirm" },
+      { label: "esc", action: "cancel" },
+    ];
+  }
+  if (pickerType === "select") {
+    return [
+      { label: "up/down", action: "move" },
+      { label: "enter", action: "select" },
+      { label: "esc", action: "cancel" },
+    ];
+  }
+  if (pickerType === "multiselect") {
+    return [
+      { label: "up/down", action: "move" },
+      { label: "space", action: "toggle" },
+      { label: "enter", action: "confirm" },
+      { label: "esc", action: "cancel" },
+    ];
+  }
+  return [];
+}
+
 function createApp({
   React,
   useWizardSteps,
@@ -482,6 +512,8 @@ function createApp({
   AskConfirm,
   AskSelect,
   AskMultiSelect,
+  KeyboardHintsBar,
+  ScreenContainer,
   PACKAGE_VERSION,
   STEP_LABELS,
   controllerRef,
@@ -523,14 +555,17 @@ function createApp({
         ? React.createElement(RunScreen, { steps: wiz.steps, total: STEP_LABELS.length, pickerNode })
         : React.createElement(Banner);
 
+    const hints = computeKeyboardHints(stage, picker?.type);
+
     return React.createElement(
-      React.Fragment,
+      ScreenContainer,
       null,
       React.createElement(HeaderBar, {
         left: `🥓 Bacon Wizard v${PACKAGE_VERSION}`,
         right: "geturbacon.dev",
       }),
-      stageContent
+      stageContent,
+      React.createElement(KeyboardHintsBar, { hints })
     );
   };
 }
@@ -571,8 +606,11 @@ async function main() {
     { default: OutroScreen },
     { useWizardSteps },
     { AskConfirm, AskSelect, AskMultiSelect },
+    { default: KeyboardHintsBar },
+    { default: TabContainer },
+    { default: ScreenContainer },
     { default: figures },
-    { GREEN, DIM, BRIGHT, CREAM, DARK, WARN, MONO, FAIL },
+    { SUCCESS, MUTED, PRIMARY, WARNING, LINK, ERROR },
   ] = await Promise.all([
     import("react"),
     import("ink"),
@@ -582,16 +620,26 @@ async function main() {
     import("../dist/ui/OutroScreen.js"),
     import("../dist/ui/useWizardSteps.js"),
     import("../dist/ui/Prompts.js"),
+    import("../dist/ui/KeyboardHintsBar.js"),
+    import("../dist/ui/TabContainer.js"),
+    import("../dist/ui/ScreenContainer.js"),
     import("figures"),
     import("../dist/ui/theme.js"),
   ]);
-  void CREAM; void DARK; // not used for chalk output here — destructured for parity with theme.js's full export set
-  dim = chalk.hex(DIM);
-  bright = chalk.hex(BRIGHT);
-  mono = chalk.hex(MONO);
-  green = chalk.hex(GREEN);
-  warn = chalk.hex(WARN);
-  fail = chalk.hex(FAIL);
+  void TabContainer; // wrapping now lives inside RunScreen.jsx itself, which already
+  // has the `steps` prop in scope — imported here only for parity/consistency
+  // with the rest of this dynamic-import block, not because bin/wizard.cjs
+  // needs to render it directly.
+  // theme.js's exported names are now ANSI color names (see src/ui/theme.js),
+  // not hex strings — chalk[name] (e.g. chalk.green) is the correct mapping,
+  // not chalk.hex(name). BRAND_GREEN/CREAM/DARK (unused here) are the only
+  // exports that stayed hex.
+  dim = chalk[MUTED];
+  bright = chalk[PRIMARY];
+  mono = chalk[LINK];
+  green = chalk[SUCCESS];
+  warn = chalk[WARNING];
+  fail = chalk[ERROR];
 
   // One persistent Ink instance for the whole process — render() is called
   // exactly once here, unmount() exactly once at the end (or on a fatal
@@ -614,6 +662,8 @@ async function main() {
     AskConfirm,
     AskSelect,
     AskMultiSelect,
+    KeyboardHintsBar,
+    ScreenContainer,
     PACKAGE_VERSION,
     STEP_LABELS,
     controllerRef,

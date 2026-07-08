@@ -106,6 +106,14 @@ test('opening and closing pickerNode repeatedly does not duplicate finished step
   unmount();
 
   assert.equal(countOccurrences(frame, 'Tasks'), 1, 'Tasks heading must appear exactly once');
+  // Step 1 ("Plugin installed") is not the latest step, so it only ever
+  // renders once, in StepList's own row.
   assert.equal(countOccurrences(frame, 'Plugin installed'), 1, 'finished step message must not duplicate');
-  assert.equal(countOccurrences(frame, 'Account connected'), 1, 'finished step message must not duplicate');
+  // Step 2 ("Account connected") is the latest step, so — now that RunScreen
+  // wraps its content in TabContainer (see RunScreen.jsx) — it legitimately
+  // renders twice: once in StepList's own row, once more in TabContainer's
+  // persistent status line below the rule. That's intended, not a
+  // regression of the duplicate-flush bug this test otherwise guards
+  // against (Tasks still appears exactly once above).
+  assert.equal(countOccurrences(frame, 'Account connected'), 2, 'latest step message should appear once in StepList and once in the TabContainer status line');
 });
