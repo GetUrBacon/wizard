@@ -1,8 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
-import { Spinner as InkSpinner } from '@inkjs/ui';
 import figures from 'figures';
-import { GREEN, DIM, BRIGHT, FAIL } from './theme.js';
+import { SUCCESS, MUTED, PRIMARY, ERROR } from './theme.js';
 
 // One line per step: "[n/total]" prefix + status icon/spinner + label or
 // message, all on a single row (fixed-width flexShrink: 0 prefix next to a
@@ -24,10 +23,10 @@ function PendingRow({ step, total }) {
   return (
     <Box>
       <Box flexShrink={0}>
-        <Text color={DIM}>{`[${step.n}/${total}] · `}</Text>
+        <Text color={MUTED}>{`[${step.n}/${total}] ◻ `}</Text>
       </Box>
       <Box flexGrow={1}>
-        <Text color={DIM}>{step.label}</Text>
+        <Text color={MUTED}>{step.label}</Text>
       </Box>
     </Box>
   );
@@ -37,12 +36,12 @@ function RunningRow({ step, total }) {
   return (
     <Box>
       <Box flexShrink={0}>
-        <Text color={DIM}>{`[${step.n}/${total}] `}</Text>
-        <InkSpinner />
+        <Text color={MUTED}>{`[${step.n}/${total}] `}</Text>
+        <Text color={PRIMARY}>{'▶'}</Text>
         <Text> </Text>
       </Box>
       <Box flexGrow={1}>
-        <Text color={BRIGHT}>{step.activeLabel ?? step.label}</Text>
+        <Text color={PRIMARY}>{step.activeLabel ?? step.label}</Text>
       </Box>
     </Box>
   );
@@ -52,8 +51,8 @@ function OkRow({ step, total }) {
   return (
     <Box>
       <Box flexShrink={0}>
-        <Text color={DIM}>{`[${step.n}/${total}] `}</Text>
-        <Text color={GREEN}>{figures.tick} </Text>
+        <Text color={MUTED}>{`[${step.n}/${total}] `}</Text>
+        <Text color={SUCCESS}>{'◼'} </Text>
       </Box>
       <Box flexGrow={1}>
         <Text>{step.message}</Text>
@@ -66,8 +65,8 @@ function FailRow({ step, total }) {
   return (
     <Box>
       <Box flexShrink={0}>
-        <Text color={DIM}>{`[${step.n}/${total}] `}</Text>
-        <Text color={FAIL}>{figures.cross} </Text>
+        <Text color={MUTED}>{`[${step.n}/${total}] `}</Text>
+        <Text color={ERROR}>{figures.cross} </Text>
       </Box>
       <Box flexGrow={1}>
         <Text>{step.message}</Text>
@@ -92,10 +91,10 @@ function StepRow({ step, total }) {
       {step.notes.map((note, index) => (
         <Box key={`note-${step.n}-${index}`}>
           <Box flexShrink={0}>
-            <Text color={DIM}>    · </Text>
+            <Text color={MUTED}>    · </Text>
           </Box>
           <Box flexGrow={1}>
-            <Text color={DIM}>{note}</Text>
+            <Text color={MUTED}>{note}</Text>
           </Box>
         </Box>
       ))}
@@ -122,15 +121,25 @@ function StepRow({ step, total }) {
 // their TUI). A brief full-tree redraw per step is imperceptible in this
 // ~10-30 second flow and keeps HeaderBar/Tasks as one cohesive block.
 export default function StepList({ steps, total }) {
+  const completed = steps.filter((s) => s.status === 'ok').length;
+  const failed = steps.filter((s) => s.status === 'fail').length;
+  const progressText =
+    failed > 0
+      ? `Progress: ${completed}/${total} completed (${failed} failed)`
+      : `Progress: ${completed}/${total} completed`;
+
   return (
     <Box flexDirection="column">
-      <Text color={GREEN} bold>
+      <Text color={SUCCESS} bold>
         Tasks
       </Text>
       <Text />
       {steps.map((step) => (
         <StepRow key={step.n} step={step} total={total} />
       ))}
+      <Box marginTop={1}>
+        <Text color={MUTED}>{progressText}</Text>
+      </Box>
     </Box>
   );
 }

@@ -1,7 +1,7 @@
 import React from 'react';
 import { Text } from 'ink';
 import { useTerminalWidth } from './useTerminalWidth.js';
-import { GREEN, DARK } from './theme.js';
+import { BRAND_GREEN, DARK } from './theme.js';
 
 // A single-color header bar present on every screen (intro/run/outro), the
 // way PostHog's wizard keeps its orange bar mounted throughout. Built as ONE
@@ -15,7 +15,7 @@ export default function HeaderBar({ left, right }) {
   const line = (left + ' '.repeat(gap) + right).slice(0, width);
 
   return (
-    <Text backgroundColor={GREEN} color={DARK} bold>
+    <Text backgroundColor={BRAND_GREEN} color={DARK} bold>
       {line}
     </Text>
   );

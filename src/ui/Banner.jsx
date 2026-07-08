@@ -1,6 +1,6 @@
 import React from "react";
 import { Box, Text } from "ink";
-import { GREEN, DIM, BRIGHT, CREAM } from "./theme.js";
+import { BRAND_GREEN, MUTED, PRIMARY, CREAM } from "./theme.js";
 
 const BACON_ART = [
   "  ██████╗  █████╗  ██████╗ ██████╗ ███╗   ██╗",
@@ -31,7 +31,7 @@ export default function Banner(props) {
       {/* 2. Each art line in green with "  🥓" suffix */}
       {art.map((line) => (
         <Box key={line}>
-          <Text color={GREEN}>{line + "  🥓"}</Text>
+          <Text color={BRAND_GREEN}>{line + "  🥓"}</Text>
         </Box>
       ))}
       {/* 3. One blank line */}
@@ -42,7 +42,7 @@ export default function Banner(props) {
           {Array.from(line).map((ch, charIdx) => (
             <Text
               key={`strip-${idx}-${charIdx}`}
-              color={ch === "░" ? CREAM : GREEN}
+              color={ch === "░" ? CREAM : BRAND_GREEN}
             >
               {ch}
             </Text>
@@ -53,12 +53,12 @@ export default function Banner(props) {
       <Text />
       {/* 6. "setup wizard" · tagline line */}
       <Box key="tagline-line">
-        <Text color={BRIGHT}>setup wizard</Text>
-        <Text color={DIM}>{"  ·  "}</Text>
-        <Text color={DIM}>{tagline}</Text>
+        <Text color={PRIMARY}>setup wizard</Text>
+        <Text color={MUTED}>{"  ·  "}</Text>
+        <Text color={MUTED}>{tagline}</Text>
       </Box>
       {/* 7. Dim rule line */}
-      <Text key="rule" color={DIM}>
+      <Text key="rule" color={MUTED}>
         {"─".repeat(48)}
       </Text>
       {/* 8. One blank line */}

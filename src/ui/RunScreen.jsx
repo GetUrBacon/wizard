@@ -2,6 +2,7 @@ import React from 'react';
 import { Box } from 'ink';
 import LearnPane from './LearnPane.js';
 import StepList from './StepList.js';
+import TabContainer from './TabContainer.js';
 import { useTerminalWidth } from './useTerminalWidth.js';
 
 // Two-column split for the run stage: Learn (left) + Tasks (right), the same
@@ -35,16 +36,18 @@ export default function RunScreen({ steps, total, pickerNode }) {
   const isNarrow = width < 80;
 
   return (
-    <Box flexDirection={isNarrow ? 'column' : 'row'} gap={isNarrow ? 1 : 3}>
-      <Box width={isNarrow ? undefined : '50%'} flexDirection="column">
-        <LearnPane />
-      </Box>
-      <Box width={isNarrow ? undefined : '50%'} flexDirection="column">
-        <Box display={pickerNode ? 'none' : 'flex'} flexDirection="column">
-          <StepList steps={steps} total={total} />
+    <TabContainer steps={steps}>
+      <Box flexDirection={isNarrow ? 'column' : 'row'} gap={isNarrow ? 1 : 3}>
+        <Box width={isNarrow ? undefined : '50%'} flexDirection="column">
+          <LearnPane />
         </Box>
-        {pickerNode}
+        <Box width={isNarrow ? undefined : '50%'} flexDirection="column">
+          <Box display={pickerNode ? 'none' : 'flex'} flexDirection="column">
+            <StepList steps={steps} total={total} />
+          </Box>
+          {pickerNode}
+        </Box>
       </Box>
-    </Box>
+    </TabContainer>
   );
 }
